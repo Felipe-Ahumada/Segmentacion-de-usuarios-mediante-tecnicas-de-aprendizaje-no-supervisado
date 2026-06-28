@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: streaming_database
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: streaming_usuarios
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/perfil_usuarios.csv:/docker-entrypoint-initdb.d/perfil_usuarios.csv
+  
+  ml-service:
+    build: 
+      context: ./ml-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - modelos:/app/models
+      - outputs:/app/outputs
+    depends_on:
+      - postgres
+
+  dashboard:
+    build:
+      context: ./dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - modelos:/app/models
+      - outputs:/app/outputs
+    depends_on:
+      - ml-service
+
+volumes:
+  modelos:
+  outputs:
