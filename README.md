@@ -58,6 +58,18 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 | `interacciones_mensuales_soporte` | perfil | Contactos con soporte en el mes |
 | `distancia_promedio_red_km` | perfil | Distancia promedio asociada a la red de conexión |
 
+## Tecnologías utilizadas
+
+| Categoría | Herramientas |
+|-----------|--------------|
+| Lenguaje | Python 3.12 |
+| Machine Learning | scikit-learn (KMeans, StandardScaler, PCA, Silhouette), KneeLocator |
+| Procesamiento de datos | pandas, NumPy |
+| Base de datos | PostgreSQL, SQLAlchemy |
+| API | FastAPI, Uvicorn |
+| Visualización | Streamlit, Matplotlib, Seaborn |
+| Infraestructura | Docker, Docker Compose |
+
 ## Estructura del proyecto
 
 ```
@@ -93,6 +105,14 @@ No se requiere Python local ni ninguna dependencia adicional.
 
 ## Cómo levantar el proyecto
 
+Antes de levantar los servicios, crea el archivo de variables de entorno a partir de la plantilla. Este archivo define las credenciales de PostgreSQL y no se versiona por seguridad.
+
+```bash
+cp .env.example .env
+```
+
+Luego construye y levanta los contenedores:
+
 ```bash
 docker compose up --build
 ```
@@ -105,11 +125,33 @@ Esto levanta los tres servicios en orden. El servicio `ml-service` ejecuta prime
 | API ML | http://localhost:8000 |
 | PostgreSQL | localhost:5432 |
 
-Para detener todos los servicios:
+## Comandos útiles
+
+Detener los servicios:
 
 ```bash
 docker compose down
 ```
+
+Detener y eliminar también los volúmenes (modelos y base de datos). Es necesario si se modifica `init.sql` o `database/perfil_usuarios.csv`, ya que PostgreSQL solo ejecuta el script de inicialización cuando el volumen está vacío:
+
+```bash
+docker compose down -v
+```
+
+Reconstruir las imágenes desde cero tras cambios en dependencias o Dockerfiles:
+
+```bash
+docker compose build --no-cache
+```
+
+Inspeccionar la base de datos directamente:
+
+```bash
+docker exec -it streaming_database psql -U admin -d streaming_usuarios
+```
+
+Una vez dentro de `psql`, listar las tablas con `\dt` y consultar los datos cargados con `SELECT * FROM perfil_usuario LIMIT 5;`.
 
 ## Pipeline de entrenamiento
 
@@ -206,6 +248,32 @@ El dashboard permite explorar los segmentos obtenidos mediante filtros interacti
 - **Ejecutiva**: indicadores de alto nivel, tamaño de cada segmento e interpretación de negocio generada automáticamente para cada grupo.
 - **Técnica**: métricas de validación del modelo, método del codo, coeficiente Silhouette por k, proyección PCA, mapa de calor normalizado y gráfico radial.
 - **Operativa**: perfilamiento detallado por segmento, distribución por variable seleccionable y centroides en escala original.
+
+## Resultados de la segmentación
+
+El modelo identificó **3 segmentos** de usuarios. La siguiente tabla resume las variables de negocio más relevantes para cada uno (valores promedio según los centroides en escala original):
+
+| Segmento | Gasto mensual | Horas consumo | Sesiones/sem | Contenidos vistos | % finalización | Antigüedad (meses) | % uso promociones |
+|----------|--------------:|--------------:|-------------:|------------------:|---------------:|-------------------:|------------------:|
+| 0 | 212 | 28.9 | 15.0 | 49 | 68% | 44 | 31% |
+| 1 | 80 | 35.5 | 3.5 | 10 | 38% | 15 | 52% |
+| 2 | 428 | 46.5 | 4.9 | 25 | 84% | 71 | 9% |
+
+### Interpretación de negocio
+
+- **Segmento 0 — Usuarios frecuentes.** Registran la mayor cantidad de sesiones semanales y de contenidos vistos, con gasto y antigüedad intermedios. Son usuarios muy activos por frecuencia de uso.
+
+  *Acción sugerida:* recomendaciones personalizadas y programas de fidelización para sostener su nivel de actividad.
+
+- **Segmento 1 — Usuarios ocasionales sensibles a promociones.** Bajo consumo, bajo gasto, baja tasa de finalización y poca antigüedad, junto con el mayor uso de promociones. Presentan el mayor riesgo de fuga.
+
+  *Acción sugerida:* campañas de retención y onboarding que aumenten el enganche temprano.
+
+- **Segmento 2 — Usuarios intensivos premium.** Mayor gasto mensual, sesiones más largas, mayor tasa de finalización, más géneros consumidos, mayor antigüedad y mínima dependencia de promociones. Son los clientes de mayor valor y más fieles.
+
+  *Acción sugerida:* beneficios exclusivos y acceso anticipado a contenidos para preservar su lealtad.
+
+> Los valores corresponden al modelo entrenado con el dataset actual (`random_state` fijo, resultados reproducibles). Si se reentrena con datos distintos, los segmentos pueden variar.
 
 ## Colaboración
 

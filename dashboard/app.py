@@ -1,3 +1,9 @@
+"""Dashboard interactivo de segmentación de usuarios.
+
+Consume los resultados del modelo desde la API del servicio ML y los presenta
+en tres vistas adaptadas a la audiencia: ejecutiva, técnica y operativa.
+"""
+
 import numpy as np
 import pandas as pd
 import requests
@@ -8,11 +14,16 @@ import seaborn as sns
 st.set_page_config(page_title="Segmentación de Usuarios Streaming", layout="wide")
 st.title("Segmentación de Usuarios — Plataforma de Streaming")
 
-# Datos desde el servicio ML
-try:
+# Datos desde el servicio ML (cacheados para no repetir la petición en cada interacción)
+@st.cache_data(ttl=300)
+def cargar_datos():
     respuesta = requests.get("http://ml-service:8000/dashboard-data", timeout=30)
     respuesta.raise_for_status()
-    payload = respuesta.json()
+    return respuesta.json()
+
+
+try:
+    payload = cargar_datos()
 except requests.exceptions.RequestException as e:
     st.error(f"No se pudo obtener datos del servicio ML: {e}")
     st.stop()
@@ -33,9 +44,7 @@ variables_perfil = [
     "interacciones_mensuales_soporte",
 ]
 
-# ============================================================
-# Configuración de audiencia y filtros
-# ============================================================
+# Selección de audiencia y filtros
 st.sidebar.header("Audiencia")
 audiencia = st.sidebar.radio(
     "Vista del dashboard",
@@ -93,9 +102,7 @@ def interpretar_segmento(cluster_id, fila, promedios):
     )
 
 
-# ============================================================
-# VISTA EJECUTIVA
-# ============================================================
+# Vista ejecutiva: tamaño de segmentos e interpretación de negocio
 if audiencia == "Ejecutiva":
     st.caption("Vista orientada a negocio: tamaño de los segmentos y su interpretación estratégica.")
 
@@ -131,9 +138,7 @@ if audiencia == "Ejecutiva":
             st.subheader(f"Segmento {cluster_id} — {n} usuarios ({pct}%)")
             st.markdown(interpretar_segmento(cluster_id, fila, promedios_global))
 
-# ============================================================
-# VISTA TÉCNICA
-# ============================================================
+# Vista técnica: validación del modelo y reducción de dimensionalidad
 elif audiencia == "Técnica":
     st.caption("Vista orientada al modelo: métricas de validación, selección de k y reducción de dimensionalidad.")
 
@@ -202,9 +207,7 @@ elif audiencia == "Técnica":
     ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
     st.pyplot(fig)
 
-# ============================================================
-# VISTA OPERATIVA
-# ============================================================
+# Vista operativa: exploración detallada por variable
 else:
     st.caption("Vista orientada a la operación: exploración detallada de cada segmento variable a variable.")
 

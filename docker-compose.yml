@@ -13,6 +13,11 @@ services:
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./database/perfil_usuarios.csv:/docker-entrypoint-initdb.d/perfil_usuarios.csv
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ml-service:
     build:
@@ -30,16 +35,14 @@ services:
       - modelos:/app/models
       - outputs:/app/outputs
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   dashboard:
     build:
       context: ./dashboard
     ports:
       - "8501:8501"
-    volumes:
-      - modelos:/app/models
-      - outputs:/app/outputs
     depends_on:
       - ml-service
 

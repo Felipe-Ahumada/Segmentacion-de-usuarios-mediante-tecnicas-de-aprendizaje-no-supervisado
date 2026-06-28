@@ -1,3 +1,11 @@
+"""Pipeline de integración y entrenamiento del modelo de segmentación.
+
+Integra el CSV de consumo con la tabla ``perfil_usuario`` de PostgreSQL, valida
+el esquema de cada fuente, entrena un modelo KMeans seleccionando el número de
+clusters con el método del codo y el coeficiente Silhouette, y persiste el
+modelo, los resultados y las métricas para que los consuma la API.
+"""
+
 import pandas as pd
 import json
 import pickle
@@ -15,7 +23,7 @@ DB_USER = os.environ["POSTGRES_USER"]
 DB_PASSWORD = os.environ["POSTGRES_PASSWORD"]
 DB_NAME = os.environ["POSTGRES_DB"]
 
-# Esquemas esperados por fuente: columnas obligatorias del conjunto
+# Columnas esperadas por fuente
 COLUMNAS_STREAMING = [
     "id_cliente",
     "horas_consumo_mensual",
@@ -60,9 +68,13 @@ os.makedirs("models", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
 
+# Tamaño de bloque para la lectura por partes
+TAMANO_BLOQUE = 10000
+
 # Consumo dentro de la plataforma
 try:
-    streaming = pd.read_csv("data/raw/usuarios_streaming.csv")
+    bloques = pd.read_csv("data/raw/usuarios_streaming.csv", chunksize=TAMANO_BLOQUE)
+    streaming = pd.concat(bloques, ignore_index=True)
     print(f"usuarios_streaming.csv cargado: {len(streaming)} registros")
 except FileNotFoundError:
     print("Error: no se encontró data/raw/usuarios_streaming.csv")
@@ -73,7 +85,8 @@ validar_esquema(streaming, COLUMNAS_STREAMING, "usuarios_streaming.csv")
 # Perfil del usuario
 try:
     engine = create_engine(f"postgresql://{DB_USER}:{DB_PASSWORD}@postgres:5432/{DB_NAME}")
-    perfil = pd.read_sql("SELECT * FROM perfil_usuario", engine)
+    bloques_perfil = pd.read_sql("SELECT * FROM perfil_usuario", engine, chunksize=TAMANO_BLOQUE)
+    perfil = pd.concat(bloques_perfil, ignore_index=True)
     print(f"perfil_usuario cargado desde PostgreSQL: {len(perfil)} registros")
 except Exception as e:
     print(f"Error al conectar con PostgreSQL: {e}")

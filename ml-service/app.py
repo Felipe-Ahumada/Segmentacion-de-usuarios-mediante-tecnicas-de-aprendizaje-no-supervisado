@@ -1,3 +1,10 @@
+"""API REST del servicio de segmentación de usuarios.
+
+Expone los resultados del modelo KMeans entrenado por ``train.py`` y permite
+clasificar nuevos usuarios en uno de los segmentos existentes. Los modelos se
+cargan al iniciar la aplicación desde el volumen ``models/``.
+"""
+
 import json
 import pickle
 
@@ -21,11 +28,16 @@ except FileNotFoundError as e:
 
 @app.get("/")
 def inicio():
+    """Verifica que el servicio esté en funcionamiento."""
     return {"mensaje": "Servicio ML funcionando"}
 
 
 @app.get("/dashboard-data")
 def dashboard_data():
+    """Retorna usuarios segmentados, centroides y métricas para el dashboard.
+
+    Devuelve ``503`` si los archivos de resultados aún no fueron generados.
+    """
     try:
         usuarios = pd.read_csv("outputs/usuarios_segmentados.csv")
         centroides = pd.read_csv("outputs/centroides.csv")
@@ -40,6 +52,12 @@ def dashboard_data():
 
 @app.post("/predict")
 def predict(datos: dict):
+    """Clasifica un usuario en un segmento a partir de sus variables.
+
+    Recibe un diccionario con las variables del usuario y retorna el cluster
+    asignado por el modelo. Devuelve ``503`` si el modelo no está cargado y
+    ``400`` si los datos enviados son inválidos.
+    """
     if modelo is None or scaler is None:
         raise HTTPException(status_code=503, detail="Modelo no disponible. Ejecutar train.py primero.")
     try:
