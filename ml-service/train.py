@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import pickle
 import os
+import sys
 
 from sqlalchemy import create_engine
 from sklearn.preprocessing import StandardScaler
@@ -10,18 +11,45 @@ from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from kneed import KneeLocator
 
+DB_USER = os.environ["POSTGRES_USER"]
+DB_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+DB_NAME = os.environ["POSTGRES_DB"]
+
 os.makedirs("models", exist_ok=True)
+os.makedirs("data/processed", exist_ok=True)
+os.makedirs("outputs", exist_ok=True)
 
 # Consumo dentro de la plataforma
-streaming = pd.read_csv("data/usuarios_streaming.csv")
+try:
+    streaming = pd.read_csv("data/raw/usuarios_streaming.csv")
+    print(f"usuarios_streaming.csv cargado: {len(streaming)} registros")
+except FileNotFoundError:
+    print("Error: no se encontró data/raw/usuarios_streaming.csv")
+    sys.exit(1)
 
 # Perfil del usuario
-engine = create_engine("postgresql://admin:admin@postgres:5432/streaming_usuarios")
-perfil = pd.read_sql("SELECT * FROM perfil_usuario", engine)
+try:
+    engine = create_engine(f"postgresql://{DB_USER}:{DB_PASSWORD}@postgres:5432/{DB_NAME}")
+    perfil = pd.read_sql("SELECT * FROM perfil_usuario", engine)
+    print(f"perfil_usuario cargado desde PostgreSQL: {len(perfil)} registros")
+except Exception as e:
+    print(f"Error al conectar con PostgreSQL: {e}")
+    sys.exit(1)
 
 # Integración por id_cliente
 data = streaming.merge(perfil, on="id_cliente")
-data.to_csv("data/usuarios_integrados.csv", index=False)
+
+if data.empty:
+    print("Error: el merge entre fuentes no produjo registros. Verificar id_cliente.")
+    sys.exit(1)
+
+if data.isnull().any().any():
+    nulos = data.isnull().sum().sum()
+    print(f"Advertencia: se encontraron {nulos} valores nulos. Se eliminan filas afectadas.")
+    data = data.dropna()
+
+print(f"Conjunto integrado: {len(data)} registros, {len(data.columns)} variables")
+data.to_csv("data/processed/usuarios_integrados.csv", index=False)
 
 # Matriz de variables sin id
 X = data.drop(columns=["id_cliente"])
@@ -41,7 +69,12 @@ for k in rango_k:
     silhouettes.append(silhouette_score(X_scaled, modelo.labels_))
 
 kl = KneeLocator(rango_k, inertias, curve="convex", direction="decreasing")
-k_optimo = int(kl.elbow)
+
+if kl.elbow is None:
+    print("Advertencia: KneeLocator no detectó un codo claro. Se usa k=3 por defecto.")
+    k_optimo = 3
+else:
+    k_optimo = int(kl.elbow)
 
 # Entrenamiento final
 kmeans = KMeans(n_clusters=k_optimo, random_state=29, n_init=10)
@@ -56,7 +89,7 @@ componentes = pca.fit_transform(X_scaled)
 data["pc1"] = componentes[:, 0]
 data["pc2"] = componentes[:, 1]
 
-data.to_csv("data/usuarios_segmentados.csv", index=False)
+data.to_csv("outputs/usuarios_segmentados.csv", index=False)
 
 # Métricas
 metricas = {
@@ -75,7 +108,7 @@ with open("models/metricas.json", "w") as f:
 # Centroides en escala original
 centroides_original = scaler.inverse_transform(kmeans.cluster_centers_)
 centroides_df = pd.DataFrame(centroides_original, columns=X.columns)
-centroides_df.to_csv("data/centroides.csv", index=False)
+centroides_df.to_csv("outputs/centroides.csv", index=False)
 
 # Persistencia
 pickle.dump(kmeans, open("models/modelo_kmeans.pkl", "wb"))
