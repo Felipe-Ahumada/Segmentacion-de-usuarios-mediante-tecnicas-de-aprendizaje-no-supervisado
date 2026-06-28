@@ -201,13 +201,11 @@ Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo e
 
 ## Dashboard
 
-El dashboard permite explorar los segmentos obtenidos mediante filtros interactivos por cluster y antigüedad del cliente. Incluye las siguientes secciones:
+El dashboard permite explorar los segmentos obtenidos mediante filtros interactivos por cluster y antigüedad del cliente. Las visualizaciones se adaptan a tres audiencias, seleccionables desde la barra lateral:
 
-- **Visualización general**: cantidad de usuarios por cluster y distribución porcentual
-- **Perfilamiento**: promedios de cada variable por segmento
-- **Comparación entre segmentos**: mapa de calor normalizado, gráfico radial y distribución por variable seleccionable
-- **Proyección PCA**: dispersión de usuarios en 2 componentes principales con color por cluster
-- **Centroides**: tabla de centroides en escala original para interpretación directa
+- **Ejecutiva**: indicadores de alto nivel, tamaño de cada segmento e interpretación de negocio generada automáticamente para cada grupo.
+- **Técnica**: métricas de validación del modelo, método del codo, coeficiente Silhouette por k, proyección PCA, mapa de calor normalizado y gráfico radial.
+- **Operativa**: perfilamiento detallado por segmento, distribución por variable seleccionable y centroides en escala original.
 
 ## Colaboración
 
