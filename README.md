@@ -91,6 +91,8 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 │   └── requirements.txt
 ├── dashboard/
 │   ├── app.py                           # visualización Streamlit
+│   ├── .streamlit/
+│   │   └── config.toml                  # tema visual del dashboard
 │   ├── Dockerfile
 │   └── requirements.txt
 └── docker-compose.yml
@@ -197,11 +199,11 @@ Retorna los usuarios segmentados, los centroides y las métricas del modelo en f
   "usuarios": [...],
   "centroides": [...],
   "metricas": {
-    "k_optimo": 4,
-    "silhouette_score": 0.312,
-    "n_usuarios": 1000,
-    "n_clusters": 4,
-    "varianza_pca": 0.61,
+    "k_optimo": 3,
+    "silhouette_score": 0.231,
+    "n_usuarios": 300,
+    "n_clusters": 3,
+    "varianza_pca": 0.449,
     "inertias": [...],
     "silhouettes": [...],
     "rango_k": [2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -237,17 +239,17 @@ Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo e
 **Respuesta:**
 ```json
 {
-  "cluster": 2
+  "cluster": 1
 }
 ```
 
 ## Dashboard
 
-El dashboard permite explorar los segmentos obtenidos mediante filtros interactivos por cluster y antigüedad del cliente. Las visualizaciones se adaptan a tres audiencias, seleccionables desde la barra lateral:
+El dashboard permite explorar los segmentos obtenidos seleccionando desde la barra lateral qué segmentos mostrar. Las visualizaciones se adaptan a tres audiencias, también seleccionables desde la barra lateral:
 
 - **Ejecutiva**: indicadores de alto nivel, tamaño de cada segmento e interpretación de negocio generada automáticamente para cada grupo.
 - **Técnica**: métricas de validación del modelo, método del codo, coeficiente Silhouette por k, proyección PCA, mapa de calor normalizado y gráfico radial.
-- **Operativa**: perfilamiento detallado por segmento, distribución por variable seleccionable y centroides en escala original.
+- **Operativa**: perfilamiento detallado por segmento, distribución por variable seleccionable, centroides en escala original y un **simulador de clasificación** que asigna un usuario nuevo a su segmento mediante el endpoint `POST /predict`.
 
 ## Resultados de la segmentación
 

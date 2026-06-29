@@ -60,8 +60,15 @@ def predict(datos: dict):
     """
     if modelo is None or scaler is None:
         raise HTTPException(status_code=503, detail="Modelo no disponible. Ejecutar train.py primero.")
+
+    # El scaler exige las mismas columnas y en el mismo orden con que se entrenó.
+    columnas = list(scaler.feature_names_in_)
+    faltantes = [c for c in columnas if c not in datos]
+    if faltantes:
+        raise HTTPException(status_code=400, detail=f"Faltan variables requeridas: {faltantes}")
+
     try:
-        df = pd.DataFrame([datos])
+        df = pd.DataFrame([datos])[columnas]
         X = scaler.transform(df)
         cluster = modelo.predict(X)
         return {"cluster": int(cluster[0])}

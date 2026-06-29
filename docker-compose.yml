@@ -37,6 +37,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   dashboard:
     build:
@@ -44,7 +50,8 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - ml-service
+      ml-service:
+        condition: service_healthy
 
 volumes:
   modelos:
