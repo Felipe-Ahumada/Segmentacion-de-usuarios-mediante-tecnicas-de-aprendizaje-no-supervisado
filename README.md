@@ -77,10 +77,10 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 ├── data/
 │   ├── raw/
 │   │   └── usuarios_streaming.csv       # input crudo, versionado
-│   └── processed/                       # merge generado, ignorado por git
-├── outputs/                             # resultados del modelo, ignorado por git
-│   ├── usuarios_segmentados.csv
-│   └── centroides.csv
+│   └── processed/                       # merge generado por train.py, no versionado
+├── outputs/                             # resultados generados por train.py, no versionados
+│   ├── usuarios_segmentados.csv         # (se crea al entrenar)
+│   └── centroides.csv                   # (se crea al entrenar)
 ├── database/
 │   ├── init.sql                         # crea tabla y carga CSV en PostgreSQL
 │   └── perfil_usuarios.csv
@@ -215,6 +215,8 @@ Retorna los usuarios segmentados, los centroides y las métricas del modelo en f
 
 Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo entrenado.
 
+Todos los porcentajes se envían en escala **0–100** (por ejemplo, `30` = 30%).
+
 **Body esperado:**
 ```json
 {
@@ -225,11 +227,11 @@ Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo e
   "porcentaje_finalizacion": 72,
   "tiempo_promedio_sesion_min": 95,
   "cantidad_generos_consumidos": 6,
-  "porcentaje_uso_promociones": 0.3,
+  "porcentaje_uso_promociones": 30,
   "antiguedad_cliente_meses": 24,
   "edad": 34,
   "dispositivos_registrados": 2,
-  "porcentaje_uso_app_movil": 0.65,
+  "porcentaje_uso_app_movil": 65,
   "cantidad_perfiles_creados": 3,
   "interacciones_mensuales_soporte": 1,
   "distancia_promedio_red_km": 12.5
@@ -242,6 +244,8 @@ Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo e
   "cluster": 1
 }
 ```
+
+Devuelve `400` si falta alguna variable o si los datos enviados son inválidos.
 
 ## Dashboard
 

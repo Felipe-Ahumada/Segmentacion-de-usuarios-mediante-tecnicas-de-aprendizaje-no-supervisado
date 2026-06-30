@@ -2,7 +2,6 @@ FROM python:3.12.6-slim
 
 WORKDIR /app
 
-# Evita archivos .pyc y fuerza salida sin buffer para ver logs en tiempo real
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

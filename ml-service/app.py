@@ -1,8 +1,7 @@
-"""API REST del servicio de segmentación de usuarios.
+"""API REST que expone el modelo de segmentación y clasifica nuevos usuarios.
 
-Expone los resultados del modelo KMeans entrenado por ``train.py`` y permite
-clasificar nuevos usuarios en uno de los segmentos existentes. Los modelos se
-cargan al iniciar la aplicación desde el volumen ``models/``.
+Carga el modelo KMeans y el scaler entrenados por train.py desde el volumen
+models/ al iniciar, y sirve los resultados al dashboard.
 """
 
 import json
@@ -25,6 +24,10 @@ except FileNotFoundError as e:
     scaler = None
     metricas = {}
 
+# Los porcentajes se reciben en escala 0-100. Las fracciones se convierten a 0-1
+# (escala con que se entrenó el modelo) justo antes de predecir.
+FRACCIONES = ("porcentaje_uso_promociones", "porcentaje_uso_app_movil")
+
 
 @app.get("/")
 def inicio():
@@ -36,7 +39,7 @@ def inicio():
 def dashboard_data():
     """Retorna usuarios segmentados, centroides y métricas para el dashboard.
 
-    Devuelve ``503`` si los archivos de resultados aún no fueron generados.
+    Responde 503 si train.py todavía no generó los archivos de outputs/.
     """
     try:
         usuarios = pd.read_csv("outputs/usuarios_segmentados.csv")
@@ -52,11 +55,10 @@ def dashboard_data():
 
 @app.post("/predict")
 def predict(datos: dict):
-    """Clasifica un usuario en un segmento a partir de sus variables.
+    """Clasifica un usuario en un segmento con el modelo ya entrenado.
 
-    Recibe un diccionario con las variables del usuario y retorna el cluster
-    asignado por el modelo. Devuelve ``503`` si el modelo no está cargado y
-    ``400`` si los datos enviados son inválidos.
+    Todos los porcentajes se reciben en escala 0-100. Responde 503 si el modelo
+    no está cargado y 400 si faltan variables o los datos enviados son inválidos.
     """
     if modelo is None or scaler is None:
         raise HTTPException(status_code=503, detail="Modelo no disponible. Ejecutar train.py primero.")
@@ -68,7 +70,10 @@ def predict(datos: dict):
         raise HTTPException(status_code=400, detail=f"Faltan variables requeridas: {faltantes}")
 
     try:
-        df = pd.DataFrame([datos])[columnas]
+        df = pd.DataFrame([datos])[columnas].astype(float)
+        # Las fracciones llegan en 0-100 y el modelo las espera en 0-1.
+        for c in FRACCIONES:
+            df[c] = df[c] / 100
         X = scaler.transform(df)
         cluster = modelo.predict(X)
         return {"cluster": int(cluster[0])}

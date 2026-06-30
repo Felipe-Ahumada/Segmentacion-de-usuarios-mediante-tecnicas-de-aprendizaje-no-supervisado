@@ -1,9 +1,9 @@
-"""Pipeline de integración y entrenamiento del modelo de segmentación.
+"""Pipeline ETL y entrenamiento del modelo de segmentación.
 
-Integra el CSV de consumo con la tabla ``perfil_usuario`` de PostgreSQL, valida
-el esquema de cada fuente, entrena un modelo KMeans seleccionando el número de
-clusters con el método del codo y el coeficiente Silhouette, y persiste el
-modelo, los resultados y las métricas para que los consuma la API.
+Integra el CSV de consumo con la tabla perfil_usuario de PostgreSQL, valida el
+esquema de cada fuente, selecciona k con el método del codo y el coeficiente
+Silhouette, entrena KMeans y persiste el modelo, las métricas y los resultados
+para que los consuma la API.
 """
 
 import pandas as pd
@@ -116,7 +116,7 @@ X = data.drop(columns=["id_cliente"])
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-# Evaluación de k usando metodo del codo y silhouettes
+# Evaluación de k con método del codo y silhouette
 inertias = []
 silhouettes = []
 rango_k = range(2, 11)

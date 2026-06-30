@@ -1,7 +1,7 @@
-"""Dashboard interactivo de segmentación de usuarios.
+"""Dashboard de segmentación de usuarios.
 
-Consume los resultados del modelo desde la API del servicio ML y los presenta
-en tres vistas adaptadas a la audiencia: ejecutiva, técnica y operativa.
+Consume la API del servicio ML y presenta los segmentos en tres vistas
+adaptadas a la audiencia: ejecutiva, técnica y operativa.
 """
 
 import numpy as np
@@ -13,7 +13,6 @@ import seaborn as sns
 
 st.set_page_config(page_title="Segmentación de Usuarios Streaming", layout="wide")
 
-# Estilo visual unificado para todos los gráficos
 sns.set_theme(style="whitegrid")
 plt.rcParams.update({
     "figure.dpi": 120,
@@ -22,16 +21,19 @@ plt.rcParams.update({
     "axes.titlesize": 12,
     "axes.titleweight": "bold",
     "font.size": 10,
+    "grid.color": "#E5E7EB",
+    "grid.linewidth": 0.6,
+    "grid.alpha": 0.8,
+    "axes.edgecolor": "#D1D5DB",
 })
 
 st.title("Segmentación de Usuarios — Plataforma de Streaming")
 st.caption("Análisis de segmentos de clientes de una plataforma de streaming mediante KMeans.")
 st.divider()
 
-# Datos desde el servicio ML. Se cachean la petición y la construcción de los
-# DataFrames para no repetirlas en cada interacción del usuario (rendimiento).
 @st.cache_data
 def cargar_datos():
+    """Descarga los datos del servicio ML. Cacheado para no repetir la petición en cada interacción."""
     respuesta = requests.get("http://ml-service:8000/dashboard-data", timeout=30)
     respuesta.raise_for_status()
     payload = respuesta.json()
@@ -46,7 +48,6 @@ except requests.exceptions.RequestException as e:
     st.error(f"No se pudo obtener datos del servicio ML: {e}")
     st.stop()
 
-# Todas las variables con las que se entrenó el modelo (mismas que usa KMeans)
 variables_perfil = [
     "horas_consumo_mensual",
     "gasto_mensual",
@@ -65,7 +66,6 @@ variables_perfil = [
     "distancia_promedio_red_km",
 ]
 
-# Nombres de negocio de cada segmento (según el modelo actual)
 NOMBRES_SEGMENTOS = {
     0: "Usuarios frecuentes",
     1: "Ocasionales sensibles a promociones",
@@ -78,7 +78,6 @@ def nombre_segmento(cluster_id):
     return NOMBRES_SEGMENTOS.get(cluster_id, f"Segmento {cluster_id}")
 
 
-# Selección de audiencia y filtros
 st.sidebar.header("Audiencia")
 audiencia = st.sidebar.radio(
     "Vista del dashboard",
@@ -102,14 +101,15 @@ datos = usuarios[usuarios["cluster"].isin(clusters_sel)]
 
 perfil_segmentos = datos.groupby("cluster")[variables_perfil].mean().round(2)
 
+# Promedio global, no depende de los filtros.
+promedios_global = usuarios[variables_perfil].mean()
 
-# Acciones sugeridas por segmento (según el modelo actual)
+
 ACCIONES_SEGMENTOS = {
     0: "Recomendaciones personalizadas y fidelización para sostener su actividad.",
     1: "Campañas de retención y onboarding para aumentar el enganche temprano.",
     2: "Beneficios exclusivos y acceso anticipado para preservar su lealtad.",
 }
-# Descripción de negocio redactada para cada segmento (según el análisis del modelo)
 DESCRIPCIONES_SEGMENTOS = {
     0: (
         "Es el segmento más activo en frecuencia: se conecta muchas más veces por semana y "
@@ -132,7 +132,6 @@ DESCRIPCIONES_SEGMENTOS = {
         "el núcleo rentable de la plataforma y el foco debe ser preservar su lealtad."
     ),
 }
-# Paleta cohesiva con el tema del dashboard (indigo, ámbar, teal, ...)
 PALETA = [
     "#5B5BD6", "#E8833A", "#2BB3A3", "#D6455B", "#8C6BD6",
     "#5BA0D6", "#C9A227", "#6B7280", "#B05BD6", "#3AA0A0",
@@ -140,11 +139,10 @@ PALETA = [
 
 
 def color_segmento(cluster_id):
-    """Asigna un color fijo a cada segmento para mantener consistencia entre gráficos."""
+    """Color fijo por segmento, para que coincida en todos los gráficos."""
     return PALETA[cluster_id % len(PALETA)]
 
 
-# KPIs de negocio destacados en las tarjetas de la vista ejecutiva
 KPIS_EJECUTIVOS = [
     "gasto_mensual",
     "horas_consumo_mensual",
@@ -153,51 +151,91 @@ KPIS_EJECUTIVOS = [
     "antiguedad_cliente_meses",
     "porcentaje_uso_promociones",
 ]
-# Nombres legibles de todas las variables del modelo (con unidad cuando el valor no la muestra)
 ETIQUETAS_VAR = {
     "horas_consumo_mensual": "Horas de consumo (mes)",
     "gasto_mensual": "Gasto mensual",
     "cantidad_contenidos_vistos": "Contenidos vistos (mes)",
     "sesiones_semana": "Sesiones por semana",
     "porcentaje_finalizacion": "Finalización",
-    "tiempo_promedio_sesion_min": "Duración de sesión (min)",
+    "tiempo_promedio_sesion_min": "Duración de sesión",
     "cantidad_generos_consumidos": "Géneros consumidos",
     "porcentaje_uso_promociones": "Uso de promociones",
-    "antiguedad_cliente_meses": "Antigüedad (meses)",
-    "edad": "Edad (años)",
+    "antiguedad_cliente_meses": "Antigüedad",
+    "edad": "Edad",
     "dispositivos_registrados": "Dispositivos registrados",
     "porcentaje_uso_app_movil": "Uso de app móvil",
     "cantidad_perfiles_creados": "Perfiles creados",
     "interacciones_mensuales_soporte": "Interacciones soporte (mes)",
-    "distancia_promedio_red_km": "Distancia de red (km)",
+    "distancia_promedio_red_km": "Distancia de red",
 }
 
 
-# Columnas de porcentaje en escala 0-1 (las demás de porcentaje ya vienen en 0-100)
 PORCENTAJE_FRACCION = ("porcentaje_uso_promociones", "porcentaje_uso_app_movil")
+
+UNIDADES = {
+    "horas_consumo_mensual": "h",
+    "tiempo_promedio_sesion_min": "min",
+    "antiguedad_cliente_meses": "meses",
+    "edad": "años",
+    "distancia_promedio_red_km": "km",
+}
+
+# Variables que en el simulador se ingresan sin decimales (enteras en los datos de origen).
+VARIABLES_ENTERAS = (
+    "horas_consumo_mensual",
+    "gasto_mensual",
+    "cantidad_contenidos_vistos",
+    "sesiones_semana",
+    "tiempo_promedio_sesion_min",
+    "cantidad_generos_consumidos",
+    "antiguedad_cliente_meses",
+    "edad",
+    "dispositivos_registrados",
+    "cantidad_perfiles_creados",
+    "interacciones_mensuales_soporte",
+)
 
 
 def formato_valor(variable, valor):
-    """Formatea un valor según su tipo: moneda, porcentaje o número."""
+    """Formatea un valor según su tipo: moneda, porcentaje, unidad o número."""
     if variable in PORCENTAJE_FRACCION:
         return f"{valor * 100:.0f}%"
     if variable == "porcentaje_finalizacion":
         return f"{valor:.0f}%"
     if variable == "gasto_mensual":
         return f"${valor:,.0f}"
-    return f"{valor:,.1f}"
+    unidad = UNIDADES.get(variable)
+    return f"{valor:,.1f} {unidad}" if unidad else f"{valor:,.1f}"
 
 
 def formato_delta(variable, delta):
-    """Formatea la diferencia respecto al promedio global, con signo."""
+    """Formatea la diferencia respecto al promedio global, con signo y unidad.
+
+    En variables porcentuales la diferencia se expresa en puntos porcentuales
+    (p.p.) y no en %, para no confundirla con una variación relativa.
+    """
     signo = "+" if delta >= 0 else "-"
     if variable in PORCENTAJE_FRACCION:
-        return f"{signo}{abs(delta) * 100:.0f} pts"
+        return f"{signo}{abs(delta) * 100:.0f} p.p."
     if variable == "porcentaje_finalizacion":
-        return f"{signo}{abs(delta):.0f} pts"
+        return f"{signo}{abs(delta):.0f} p.p."
     if variable == "gasto_mensual":
         return f"{signo}${abs(delta):,.0f}"
-    return f"{signo}{abs(delta):,.1f}"
+    unidad = UNIDADES.get(variable)
+    return f"{signo}{abs(delta):,.1f} {unidad}" if unidad else f"{signo}{abs(delta):,.1f}"
+
+
+def etiqueta_formulario(variable):
+    """Etiqueta del simulador con la unidad esperada (%, $ o la unidad física)."""
+    base = ETIQUETAS_VAR.get(variable, variable)
+    if variable in PORCENTAJE_FRACCION or variable == "porcentaje_finalizacion":
+        return f"{base} (%)"
+    if variable == "gasto_mensual":
+        return f"{base} ($)"
+    unidad = UNIDADES.get(variable)
+    if unidad and not base.endswith(")"):
+        return f"{base} ({unidad})"
+    return base
 
 
 def desviacion_global(fila, promedios):
@@ -218,11 +256,10 @@ def clasificar_valor(fila, promedios):
     return "Segmento de bajo valor y en riesgo de fuga"
 
 
-# Vista ejecutiva: tamaño de segmentos e interpretación de negocio
+# Vista ejecutiva
 if audiencia == "Ejecutiva":
     st.caption("Vista orientada a negocio: tamaño de los segmentos y su interpretación estratégica.")
 
-    promedios_global = usuarios[variables_perfil].mean()
     conteo = datos["cluster"].value_counts().sort_index()
     porcentaje = (conteo / conteo.sum() * 100).round(1)
     orden_cl = list(perfil_segmentos.index)
@@ -260,8 +297,12 @@ if audiencia == "Ejecutiva":
     st.divider()
     st.header("Interpretación de negocio por segmento")
     st.caption(
-        "En cada tarjeta, el número grande es el promedio del segmento y la flecha indica su "
-        "diferencia respecto al promedio global (verde: por encima, rojo: por debajo)."
+        "Se priorizan los indicadores accionables por el negocio y con mayor poder discriminante "
+        "entre segmentos; las demás variables del modelo (como la edad) presentan baja varianza "
+        "entre grupos y se consultan en el perfil completo de la vista Operativa. En cada tarjeta, "
+        "el número grande es el promedio del segmento y la flecha indica su diferencia respecto al "
+        "promedio global (verde: por encima, rojo: por debajo). Las diferencias entre porcentajes "
+        "se expresan en puntos porcentuales (p.p.)."
     )
     for cluster_id in perfil_segmentos.index:
         fila = perfil_segmentos.loc[cluster_id]
@@ -274,6 +315,7 @@ if audiencia == "Ejecutiva":
             cols = st.columns(len(KPIS_EJECUTIVOS))
             for c, var in zip(cols, KPIS_EJECUTIVOS):
                 valor = fila[var]
+                # El delta compara contra el promedio de todos los usuarios, no contra la selección.
                 delta = valor - promedios_global[var]
                 c.metric(
                     ETIQUETAS_VAR.get(var, var),
@@ -290,11 +332,11 @@ if audiencia == "Ejecutiva":
                 fig, ax = plt.subplots(figsize=(5, 3))
                 ax.barh(etiquetas, desv.values, color=colores_barras)
                 ax.axvline(0, color="#1A1A2E", linewidth=0.8)
-                ax.set_xlabel("Diferencia vs. promedio global (%)")
+                ax.set_xlabel("Diferencia relativa vs. promedio global (%)")
                 ax.tick_params(labelsize=7)
                 st.pyplot(fig, use_container_width=False)
 
-# Vista técnica: validación del modelo y reducción de dimensionalidad
+# Vista técnica
 elif audiencia == "Técnica":
     st.caption("Vista orientada al modelo: métricas de validación, selección de k y reducción de dimensionalidad.")
     st.info("Las métricas del modelo (k óptimo, Silhouette, varianza PCA, método del codo) corresponden al modelo entrenado completo y no se ven afectadas por los filtros.")
@@ -357,7 +399,7 @@ elif audiencia == "Técnica":
         ax.legend(fontsize=8)
         st.pyplot(fig)
 
-    # La normalización min-max compara segmentos entre sí: requiere al menos dos.
+    # Normalización min-max: requiere al menos dos segmentos.
     comparable = len(perfil_segmentos) >= 2
     if comparable:
         rango = perfil_segmentos.max() - perfil_segmentos.min()
@@ -410,7 +452,7 @@ elif audiencia == "Técnica":
             "(1 = el más alto, 0 = el más bajo). Permite identificar de un vistazo qué define a cada grupo."
         )
 
-# Vista operativa: exploración detallada por variable
+# Vista operativa
 else:
     st.caption("Vista orientada a la operación: exploración detallada de cada segmento variable a variable.")
 
@@ -432,24 +474,33 @@ else:
         variables_perfil,
         format_func=lambda v: ETIQUETAS_VAR.get(v, v),
     )
-    fig, ax = plt.subplots(figsize=(9, 4))
-    for cluster_id in sorted(datos["cluster"].unique()):
-        subset = datos[datos["cluster"] == cluster_id][variable_dist]
-        if subset.nunique() < 2:
-            continue
-        sns.kdeplot(
-            subset,
-            ax=ax,
-            fill=True,
-            alpha=0.35,
-            linewidth=1.8,
-            label=nombre_segmento(cluster_id),
-            color=color_segmento(cluster_id),
-        )
+    # Boxplot por segmento: compara las distribuciones sin el solapamiento de histogramas superpuestos.
+    clusters_orden = sorted(datos["cluster"].unique())
+    series = [datos[datos["cluster"] == c][variable_dist].dropna() for c in clusters_orden]
+    fig, ax = plt.subplots(figsize=(9, 0.9 * len(clusters_orden) + 1.5))
+    cajas = ax.boxplot(
+        series,
+        vert=False,
+        patch_artist=True,
+        medianprops=dict(color="#1A1A2E", linewidth=1.5),
+        flierprops=dict(
+            marker="o", markersize=4, markerfacecolor="#9CA3AF",
+            markeredgecolor="none", alpha=0.5,
+        ),
+    )
+    for parche, c in zip(cajas["boxes"], clusters_orden):
+        parche.set_facecolor(color_segmento(c))
+        parche.set_alpha(0.75)
+    ax.set_yticks(range(1, len(clusters_orden) + 1))
+    ax.set_yticklabels([nombre_segmento(c) for c in clusters_orden])
     ax.set_xlabel(ETIQUETAS_VAR.get(variable_dist, variable_dist))
-    ax.set_ylabel("Densidad")
-    ax.legend()
+    ax.invert_yaxis()
     st.pyplot(fig)
+    st.caption(
+        "Cada caja resume la distribución del segmento: la línea central es la mediana, "
+        "la caja abarca el 50% central de los usuarios y los bigotes el resto del rango; "
+        "los puntos son valores atípicos."
+    )
 
     st.header("Usuarios segmentados")
     st.caption("Listado de usuarios según los filtros aplicados.")
@@ -472,27 +523,30 @@ else:
         "más cercano, usando el mismo KMeans entrenado (sin reentrenar)."
     )
 
-    # Valores por defecto: el promedio global, para que el formulario parta de un perfil realista.
-    promedios = usuarios[variables_perfil].mean()
     with st.form("simulador_usuario"):
         columnas_form = st.columns(3)
         usuario_nuevo = {}
         for i, var in enumerate(variables_perfil):
             col = columnas_form[i % 3]
-            etiqueta = ETIQUETAS_VAR.get(var, var)
+            etiqueta = etiqueta_formulario(var)
             if var in PORCENTAJE_FRACCION:
+                # Se ingresa en % (0-100); la conversión a la escala 0-1 del modelo la hace la API.
                 usuario_nuevo[var] = col.number_input(
-                    etiqueta, min_value=0.0, max_value=1.0,
-                    value=float(round(promedios[var], 2)), step=0.05,
+                    etiqueta, min_value=0.0, max_value=100.0,
+                    value=float(round(promedios_global[var] * 100)), step=1.0,
                 )
             elif var == "porcentaje_finalizacion":
                 usuario_nuevo[var] = col.number_input(
                     etiqueta, min_value=0.0, max_value=100.0,
-                    value=float(round(promedios[var], 1)), step=1.0,
+                    value=float(round(promedios_global[var])), step=1.0,
+                )
+            elif var in VARIABLES_ENTERAS:
+                usuario_nuevo[var] = col.number_input(
+                    etiqueta, min_value=0, value=int(round(promedios_global[var])), step=1,
                 )
             else:
                 usuario_nuevo[var] = col.number_input(
-                    etiqueta, min_value=0.0, value=float(round(promedios[var], 1)),
+                    etiqueta, min_value=0.0, value=float(round(promedios_global[var], 1)),
                 )
         enviado = st.form_submit_button("Clasificar usuario")
 
