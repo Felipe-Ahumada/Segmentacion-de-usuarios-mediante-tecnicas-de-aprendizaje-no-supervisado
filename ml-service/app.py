@@ -5,10 +5,18 @@ models/ al iniciar, y sirve los resultados al dashboard.
 """
 
 import json
+import logging
 import pickle
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Servicio Segmentación Usuarios Streaming")
 
@@ -17,9 +25,9 @@ try:
     scaler = pickle.load(open("models/scaler.pkl", "rb"))
     with open("models/metricas.json") as f:
         metricas = json.load(f)
-    print("Modelos y métricas cargados correctamente.")
+    logger.info("Modelos y métricas cargados correctamente.")
 except FileNotFoundError as e:
-    print(f"Error al cargar modelos: {e}. Ejecutar train.py antes de iniciar la API.")
+    logger.error("Error al cargar modelos: %s. Ejecutar train.py antes de iniciar la API.", e)
     modelo = None
     scaler = None
     metricas = {}

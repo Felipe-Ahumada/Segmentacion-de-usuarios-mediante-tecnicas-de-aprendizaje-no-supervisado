@@ -8,6 +8,7 @@ para que los consuma la API.
 
 import pandas as pd
 import json
+import logging
 import pickle
 import os
 import sys
@@ -18,6 +19,13 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from kneed import KneeLocator
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 DB_USER = os.environ["POSTGRES_USER"]
 DB_PASSWORD = os.environ["POSTGRES_PASSWORD"]
@@ -51,17 +59,17 @@ def validar_esquema(df, columnas_esperadas, nombre_fuente):
     """Valida que la fuente tenga las columnas esperadas y que sean numéricas."""
     faltantes = [c for c in columnas_esperadas if c not in df.columns]
     if faltantes:
-        print(f"Error: {nombre_fuente} no contiene las columnas: {faltantes}")
+        logger.error("%s no contiene las columnas: %s", nombre_fuente, faltantes)
         sys.exit(1)
 
     no_numericas = [
         c for c in columnas_esperadas if not pd.api.types.is_numeric_dtype(df[c])
     ]
     if no_numericas:
-        print(f"Error: en {nombre_fuente} estas columnas no son numéricas: {no_numericas}")
+        logger.error("En %s estas columnas no son numéricas: %s", nombre_fuente, no_numericas)
         sys.exit(1)
 
-    print(f"Esquema de {nombre_fuente} validado correctamente.")
+    logger.info("Esquema de %s validado correctamente.", nombre_fuente)
 
 
 os.makedirs("models", exist_ok=True)
@@ -75,9 +83,9 @@ TAMANO_BLOQUE = 10000
 try:
     bloques = pd.read_csv("data/raw/usuarios_streaming.csv", chunksize=TAMANO_BLOQUE)
     streaming = pd.concat(bloques, ignore_index=True)
-    print(f"usuarios_streaming.csv cargado: {len(streaming)} registros")
+    logger.info("usuarios_streaming.csv cargado: %d registros", len(streaming))
 except FileNotFoundError:
-    print("Error: no se encontró data/raw/usuarios_streaming.csv")
+    logger.error("No se encontró data/raw/usuarios_streaming.csv")
     sys.exit(1)
 
 validar_esquema(streaming, COLUMNAS_STREAMING, "usuarios_streaming.csv")
@@ -87,9 +95,9 @@ try:
     engine = create_engine(f"postgresql://{DB_USER}:{DB_PASSWORD}@postgres:5432/{DB_NAME}")
     bloques_perfil = pd.read_sql("SELECT * FROM perfil_usuario", engine, chunksize=TAMANO_BLOQUE)
     perfil = pd.concat(bloques_perfil, ignore_index=True)
-    print(f"perfil_usuario cargado desde PostgreSQL: {len(perfil)} registros")
+    logger.info("perfil_usuario cargado desde PostgreSQL: %d registros", len(perfil))
 except Exception as e:
-    print(f"Error al conectar con PostgreSQL: {e}")
+    logger.error("Error al conectar con PostgreSQL: %s", e)
     sys.exit(1)
 
 validar_esquema(perfil, COLUMNAS_PERFIL, "perfil_usuario")
@@ -98,15 +106,15 @@ validar_esquema(perfil, COLUMNAS_PERFIL, "perfil_usuario")
 data = streaming.merge(perfil, on="id_cliente")
 
 if data.empty:
-    print("Error: el merge entre fuentes no produjo registros. Verificar id_cliente.")
+    logger.error("El merge entre fuentes no produjo registros. Verificar id_cliente.")
     sys.exit(1)
 
 if data.isnull().any().any():
     nulos = data.isnull().sum().sum()
-    print(f"Advertencia: se encontraron {nulos} valores nulos. Se eliminan filas afectadas.")
+    logger.warning("Se encontraron %d valores nulos. Se eliminan filas afectadas.", nulos)
     data = data.dropna()
 
-print(f"Conjunto integrado: {len(data)} registros, {len(data.columns)} variables")
+logger.info("Conjunto integrado: %d registros, %d variables", len(data), len(data.columns))
 data.to_csv("data/processed/usuarios_integrados.csv", index=False)
 
 # Matriz de variables sin id
@@ -129,7 +137,7 @@ for k in rango_k:
 kl = KneeLocator(rango_k, inertias, curve="convex", direction="decreasing")
 
 if kl.elbow is None:
-    print("Advertencia: KneeLocator no detectó un codo claro. Se usa k=3 por defecto.")
+    logger.warning("KneeLocator no detectó un codo claro. Se usa k=3 por defecto.")
     k_optimo = 3
 else:
     k_optimo = int(kl.elbow)
@@ -139,7 +147,7 @@ kmeans = KMeans(n_clusters=k_optimo, random_state=29, n_init=10)
 clusters = kmeans.fit_predict(X_scaled)
 data["cluster"] = clusters
 
-print(f"Modelo entrenado con k_optimo = {k_optimo}")
+logger.info("Modelo entrenado con k_optimo = %d", k_optimo)
 
 # PCA
 pca = PCA(n_components=2)
@@ -173,4 +181,4 @@ pickle.dump(kmeans, open("models/modelo_kmeans.pkl", "wb"))
 pickle.dump(scaler, open("models/scaler.pkl", "wb"))
 pickle.dump(pca, open("models/pca.pkl", "wb"))
 
-print("Modelo, escalador y métricas guardados.")
+logger.info("Modelo, escalador y métricas guardados.")

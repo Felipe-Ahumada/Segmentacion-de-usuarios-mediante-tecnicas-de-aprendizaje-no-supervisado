@@ -53,6 +53,13 @@ services:
       ml-service:
         condition: service_healthy
 
+  tests:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    profiles:
+      - test
+
 volumes:
   modelos:
   outputs:

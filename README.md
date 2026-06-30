@@ -95,6 +95,13 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 │   │   └── config.toml                  # tema visual del dashboard
 │   ├── Dockerfile
 │   └── requirements.txt
+├── tests/
+│   ├── test_train.py                    # tests unitarios del pipeline ETL
+│   ├── test_api.py                      # tests de integración de la API
+│   ├── Dockerfile                       # contenedor para ejecutar los tests
+│   └── requirements.txt
+├── docs/
+│   └── informe.tex                      # informe técnico en LaTeX
 └── docker-compose.yml
 ```
 
@@ -280,6 +287,53 @@ El modelo identificó **3 segmentos** de usuarios. La siguiente tabla resume las
   *Acción sugerida:* beneficios exclusivos y acceso anticipado a contenidos para preservar su lealtad.
 
 > Los valores corresponden al modelo entrenado con el dataset actual (`random_state` fijo, resultados reproducibles). Si se reentrena con datos distintos, los segmentos pueden variar.
+
+## Testing
+
+El proyecto incluye tests unitarios y de integración en la carpeta `tests/`, con su propio contenedor definido en `docker-compose.yml` bajo el perfil `test`. Para ejecutarlos:
+
+```bash
+docker compose run --rm tests
+```
+
+Este comando construye la imagen de tests, ejecuta `pytest` y muestra los resultados en consola. El servicio usa el perfil `test`, por lo que no se levanta junto con los servicios principales (`docker compose up` no lo incluye).
+
+Para ejecutarlos localmente sin Docker:
+
+```bash
+pip install -r tests/requirements.txt
+pytest tests/ -v
+```
+
+### Tests del pipeline ETL (`test_train.py`)
+
+- Validación de esquema: columnas presentes y tipos numéricos.
+- Integración de fuentes: merge por `id_cliente`, detección de vacíos y nulos.
+- Escalamiento: media cero y desviación estándar uno tras `StandardScaler`.
+- Modelo KMeans: asignación de clusters, reproducibilidad, inercia decreciente, Silhouette en rango válido.
+- Centroides: dimensiones correctas tras inversión a escala original.
+
+### Tests de la API (`test_api.py`)
+
+- `GET /`: respuesta 200 con mensaje de estado.
+- `POST /predict`: clasificación válida, error 400 con variables faltantes, reproducibilidad.
+
+## Logging
+
+El pipeline ETL y la API utilizan el módulo `logging` de Python con formato estructurado:
+
+```
+2025-06-28 14:32:01 [INFO] usuarios_streaming.csv cargado: 300 registros
+2025-06-28 14:32:02 [WARNING] Se encontraron 2 valores nulos. Se eliminan filas afectadas.
+2025-06-28 14:32:03 [ERROR] No se encontró data/raw/usuarios_streaming.csv
+```
+
+Los niveles de severidad son:
+- **INFO**: progreso normal del pipeline (carga, validación, entrenamiento).
+- **WARNING**: situaciones recuperables (valores nulos eliminados, codo no detectado).
+- **ERROR**: fallos que detienen la ejecución (archivo faltante, conexión fallida).
+
+La salida se dirige a stdout y se puede consultar con `docker compose logs`.
 
 ## Colaboración
 
