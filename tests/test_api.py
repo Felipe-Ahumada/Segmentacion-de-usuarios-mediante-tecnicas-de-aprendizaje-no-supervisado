@@ -13,8 +13,11 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ml-service"))
+from preprocesamiento import Winsorizer, CorrelationFilter
 
 
 # Fixtures
@@ -56,9 +59,74 @@ def metricas_mock():
 
 
 @pytest.fixture
-def client(modelo_y_scaler, metricas_mock, tmp_path):
+def modelos_supervisados(modelo_y_scaler):
+    """Crea clasificador y regresor supervisados con datos sintéticos."""
+    kmeans, scaler = modelo_y_scaler
+    np.random.seed(42)
+    columnas = list(scaler.feature_names_in_)
+    data = pd.DataFrame(np.random.rand(60, len(columnas)), columns=columnas)
+    X_scaled = scaler.transform(data)
+    labels = kmeans.predict(X_scaled)
+
+    clasificador = Pipeline([
+        ("winsorizer", Winsorizer()),
+        ("scaler", StandardScaler()),
+        ("colinealidad", CorrelationFilter()),
+        ("clf", RandomForestClassifier(n_estimators=50, random_state=29)),
+    ])
+    clasificador.fit(data.values, labels)
+
+    target = "gasto_mensual"
+    features_reg = [c for c in columnas if c != target]
+    regresor = Pipeline([
+        ("winsorizer", Winsorizer()),
+        ("scaler", StandardScaler()),
+        ("colinealidad", CorrelationFilter()),
+        ("reg", GradientBoostingRegressor(n_estimators=50, random_state=29)),
+    ])
+    regresor.fit(data[features_reg].values, data[target].values)
+
+    metricas_sup = {
+        "clasificacion": {
+            "resultados": {
+                "Random Forest": {
+                    "accuracy": 0.95, "precision": 0.94, "recall": 0.93,
+                    "f1_macro": 0.93, "confusion_matrix": [[5, 0, 1], [0, 6, 0], [1, 0, 5]],
+                    "best_params": {"clf__n_estimators": 50}, "cv_score": 0.90,
+                    "stage1_score": 0.88,
+                },
+            },
+            "mejor_modelo": "Random Forest",
+            "importancia_variables": {c: round(1.0 / len(columnas), 4) for c in columnas},
+            "columnas": columnas,
+            "features_post_filtro": columnas,
+        },
+        "regresion": {
+            "target": target,
+            "features": features_reg,
+            "features_post_filtro": features_reg,
+            "resultados": {
+                "Gradient Boosting": {
+                    "r2": 0.85, "mae": 15.0, "rmse": 20.0,
+                    "best_params": {"reg__n_estimators": 50}, "cv_score": 0.80,
+                    "stage1_score": 0.78,
+                },
+            },
+            "mejor_modelo": "Gradient Boosting",
+            "importancia_variables": {c: round(1.0 / len(features_reg), 4) for c in features_reg},
+            "y_test": [100, 200, 300],
+            "y_pred": [110, 190, 310],
+        },
+    }
+
+    return clasificador, regresor, metricas_sup
+
+
+@pytest.fixture
+def client(modelo_y_scaler, metricas_mock, modelos_supervisados, tmp_path):
     """Cliente de test de FastAPI con modelo y archivos mockeados."""
     kmeans, scaler = modelo_y_scaler
+    clasificador, regresor, metricas_sup = modelos_supervisados
 
     models_dir = tmp_path / "models"
     models_dir.mkdir()
@@ -67,8 +135,12 @@ def client(modelo_y_scaler, metricas_mock, tmp_path):
 
     pickle.dump(kmeans, open(models_dir / "modelo_kmeans.pkl", "wb"))
     pickle.dump(scaler, open(models_dir / "scaler.pkl", "wb"))
+    pickle.dump(clasificador, open(models_dir / "mejor_clasificador.pkl", "wb"))
+    pickle.dump(regresor, open(models_dir / "mejor_regresor.pkl", "wb"))
     with open(models_dir / "metricas.json", "w") as f:
         json.dump(metricas_mock, f)
+    with open(models_dir / "metricas_supervisado.json", "w") as f:
+        json.dump(metricas_sup, f)
 
     columnas = list(scaler.feature_names_in_)
     usuarios = pd.DataFrame(np.random.rand(10, len(columnas)), columns=columnas)
@@ -98,6 +170,9 @@ def client(modelo_y_scaler, metricas_mock, tmp_path):
             api_module.modelo = kmeans
             api_module.scaler = scaler
             api_module.metricas = metricas_mock
+            api_module.clasificador = clasificador
+            api_module.regresor = regresor
+            api_module.metricas_supervisado = metricas_sup
             tc = TestClient(api_module.app)
             os.chdir(old_cwd)
             yield tc
@@ -170,3 +245,49 @@ def test_predict_distintos_usuarios(client, usuario_valido):
 
     assert r_bajo.status_code == 200
     assert r_alto.status_code == 200
+
+
+# Tests del endpoint GET /supervised-data
+
+def test_supervised_data_retorna_clasificacion_y_regresion(client):
+    """GET /supervised-data retorna datos de clasificación y regresión."""
+    response = client.get("/supervised-data")
+    assert response.status_code == 200
+    data = response.json()
+    assert "clasificacion" in data
+    assert "regresion" in data
+    assert "mejor_modelo" in data["clasificacion"]
+    assert "mejor_modelo" in data["regresion"]
+
+
+# Tests del endpoint POST /predict-clasificador
+
+def test_predict_clasificador_retorna_cluster(client, usuario_valido):
+    """POST /predict-clasificador retorna un cluster válido."""
+    response = client.post("/predict-clasificador", json=usuario_valido)
+    assert response.status_code == 200
+    assert "cluster" in response.json()
+    assert response.json()["cluster"] in [0, 1, 2]
+
+
+def test_predict_clasificador_variables_faltantes(client):
+    """POST /predict-clasificador retorna 400 con variables faltantes."""
+    response = client.post("/predict-clasificador", json={"gasto_mensual": 100})
+    assert response.status_code == 400
+
+
+# Tests del endpoint POST /predict-gasto
+
+def test_predict_gasto_retorna_estimacion(client, usuario_valido):
+    """POST /predict-gasto retorna un gasto estimado."""
+    datos_sin_gasto = {k: v for k, v in usuario_valido.items() if k != "gasto_mensual"}
+    response = client.post("/predict-gasto", json=datos_sin_gasto)
+    assert response.status_code == 200
+    assert "gasto_mensual_estimado" in response.json()
+    assert isinstance(response.json()["gasto_mensual_estimado"], (int, float))
+
+
+def test_predict_gasto_variables_faltantes(client):
+    """POST /predict-gasto retorna 400 con variables faltantes."""
+    response = client.post("/predict-gasto", json={"edad": 30})
+    assert response.status_code == 400
