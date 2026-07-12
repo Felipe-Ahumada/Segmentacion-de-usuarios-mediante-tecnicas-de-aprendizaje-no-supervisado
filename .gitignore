@@ -1,7 +1,12 @@
 .DS_Store
 **/.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
 data/processed/*
 !data/processed/.gitkeep
 outputs/*
 !outputs/.gitkeep
+models/*.pkl
+models/*.json
 .env
