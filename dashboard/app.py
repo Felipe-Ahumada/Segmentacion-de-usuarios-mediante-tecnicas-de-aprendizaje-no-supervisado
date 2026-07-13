@@ -42,6 +42,14 @@ def cargar_datos():
     return usuarios, centroides, payload["metricas"]
 
 
+@st.cache_data
+def cargar_supervisado():
+    """Descarga métricas de modelos supervisados desde la API."""
+    resp = requests.get("http://ml-service:8000/supervised-data", timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 try:
     usuarios, centroides, metricas = cargar_datos()
 except requests.exceptions.RequestException as e:
@@ -81,7 +89,7 @@ def nombre_segmento(cluster_id):
 st.sidebar.header("Audiencia")
 audiencia = st.sidebar.radio(
     "Vista del dashboard",
-    ["Ejecutiva", "Técnica", "Operativa"],
+    ["Ejecutiva", "Técnica", "Operativa", "Supervisado"],
     help="Cada vista adapta el nivel de detalle al perfil de quien analiza los resultados.",
 )
 
@@ -453,7 +461,7 @@ elif audiencia == "Técnica":
         )
 
 # Vista operativa
-else:
+elif audiencia == "Operativa":
     st.caption("Vista orientada a la operación: exploración detallada de cada segmento variable a variable.")
 
     st.header("Perfilamiento de segmentos")
@@ -565,3 +573,244 @@ else:
             if descripcion:
                 st.markdown(descripcion)
             st.info(f"**Acción sugerida:** {ACCIONES_SEGMENTOS.get(cluster_pred, 'Sin acción definida.')}")
+
+# Vista supervisado
+elif audiencia == "Supervisado":
+    st.caption(
+        "Modelos supervisados entrenados sobre los segmentos de KMeans (clasificación) "
+        "y sobre el gasto mensual (regresión), con tuning de hiperparámetros vía GridSearchCV."
+    )
+
+    try:
+        sup = cargar_supervisado()
+    except requests.exceptions.RequestException as e:
+        st.error(f"No se pudo obtener datos supervisados: {e}")
+        st.stop()
+
+    cls_data = sup["clasificacion"]
+    reg_data = sup["regresion"]
+
+    # ── Clasificación ────────────────────────────────────────────────
+    st.header("Clasificación de segmentos")
+    st.markdown(
+        "Los segmentos identificados por KMeans se usan como **variable objetivo** para entrenar "
+        "clasificadores supervisados con `Pipeline(StandardScaler + modelo)` y `GridSearchCV` "
+        "(validación cruzada de 5 folds). Esto permite asignar nuevos usuarios a un segmento "
+        "mediante un modelo que aprende los patrones discriminantes de cada grupo."
+    )
+
+    mejor_cls = cls_data["mejor_modelo"]
+    mejor_cls_res = cls_data["resultados"][mejor_cls]
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Mejor modelo", mejor_cls)
+    col2.metric("Accuracy", f"{mejor_cls_res['accuracy']:.1%}")
+    col3.metric("F1 macro", f"{mejor_cls_res['f1_macro']:.1%}")
+    col4.metric("CV Score (F1)", f"{mejor_cls_res['cv_score']:.1%}")
+
+    st.subheader("Comparación de clasificadores")
+    filas_cls = []
+    for nombre, res in cls_data["resultados"].items():
+        filas_cls.append({
+            "Modelo": nombre,
+            "Accuracy": f"{res['accuracy']:.1%}",
+            "Precision": f"{res['precision']:.1%}",
+            "Recall": f"{res['recall']:.1%}",
+            "F1 macro": f"{res['f1_macro']:.1%}",
+            "CV Score": f"{res['cv_score']:.1%}",
+        })
+    st.dataframe(pd.DataFrame(filas_cls), hide_index=True, use_container_width=True)
+
+    col_cm, col_fi = st.columns(2)
+
+    with col_cm:
+        st.subheader(f"Matriz de confusión — {mejor_cls}")
+        cm = np.array(mejor_cls_res["confusion_matrix"])
+        etiquetas_cm = [nombre_segmento(c) for c in range(cm.shape[0])]
+        fig, ax = plt.subplots(figsize=(5, 4))
+        sns.heatmap(
+            cm, annot=True, fmt="d", cmap="Blues", ax=ax,
+            xticklabels=etiquetas_cm, yticklabels=etiquetas_cm,
+        )
+        ax.set_xlabel("Predicción")
+        ax.set_ylabel("Real")
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=7)
+        plt.setp(ax.get_yticklabels(), fontsize=7)
+        st.pyplot(fig)
+
+    with col_fi:
+        st.subheader("Importancia de variables (clasificación)")
+        if cls_data.get("importancia_variables"):
+            imp = cls_data["importancia_variables"]
+            imp_sorted = sorted(imp.items(), key=lambda x: x[1], reverse=True)
+            nombres_imp = [ETIQUETAS_VAR.get(v, v) for v, _ in imp_sorted]
+            valores_imp = [val for _, val in imp_sorted]
+            fig, ax = plt.subplots(figsize=(5, 4))
+            ax.barh(nombres_imp[::-1], valores_imp[::-1], color="#5B5BD6")
+            ax.set_xlabel("Importancia")
+            ax.tick_params(labelsize=7)
+            st.pyplot(fig)
+        else:
+            st.info("El mejor clasificador no expone importancia de variables directa.")
+
+    st.markdown(
+        f"El mejor clasificador es **{mejor_cls}** con un F1 macro de "
+        f"**{mejor_cls_res['f1_macro']:.1%}** y accuracy de **{mejor_cls_res['accuracy']:.1%}** "
+        f"en el conjunto de test (30% de los datos). Los hiperparámetros óptimos se seleccionaron "
+        f"con GridSearchCV (CV Score = {mejor_cls_res['cv_score']:.1%})."
+    )
+
+    with st.expander("Ver hiperparámetros óptimos por modelo"):
+        for nombre, res in cls_data["resultados"].items():
+            params_str = ", ".join(f"{k}={v}" for k, v in res["best_params"].items())
+            st.markdown(f"**{nombre}**: {params_str}")
+
+    st.divider()
+
+    # ── Regresión ────────────────────────────────────────────────────
+    target_label = ETIQUETAS_VAR.get(reg_data["target"], reg_data["target"])
+    st.header(f"Regresión: predicción de {target_label}")
+    st.markdown(
+        f"Se entrena un modelo de regresión para predecir **{target_label}** "
+        "a partir de las 14 variables restantes del perfil de usuario, usando "
+        "`Pipeline(StandardScaler + modelo)` con `GridSearchCV`. Esto permite "
+        "estimar el gasto esperado de un nuevo usuario según sus características."
+    )
+
+    mejor_reg = reg_data["mejor_modelo"]
+    mejor_reg_res = reg_data["resultados"][mejor_reg]
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Mejor modelo", mejor_reg)
+    col2.metric("R²", f"{mejor_reg_res['r2']:.3f}")
+    col3.metric("MAE", f"${mejor_reg_res['mae']:,.0f}")
+    col4.metric("RMSE", f"${mejor_reg_res['rmse']:,.0f}")
+
+    st.subheader("Comparación de regresores")
+    filas_reg = []
+    for nombre, res in reg_data["resultados"].items():
+        filas_reg.append({
+            "Modelo": nombre,
+            "R²": f"{res['r2']:.3f}",
+            "MAE": f"${res['mae']:,.0f}",
+            "RMSE": f"${res['rmse']:,.0f}",
+            "CV Score (R²)": f"{res['cv_score']:.3f}",
+        })
+    st.dataframe(pd.DataFrame(filas_reg), hide_index=True, use_container_width=True)
+
+    col_scatter, col_fi_reg = st.columns(2)
+
+    with col_scatter:
+        st.subheader(f"Real vs. Predicción — {mejor_reg}")
+        y_test_reg = reg_data["y_test"]
+        y_pred_reg = reg_data["y_pred"]
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.scatter(
+            y_test_reg, y_pred_reg, alpha=0.6,
+            color="#E8833A", edgecolors="white", linewidth=0.5,
+        )
+        lims = [
+            min(min(y_test_reg), min(y_pred_reg)),
+            max(max(y_test_reg), max(y_pred_reg)),
+        ]
+        ax.plot(lims, lims, "--", color="#D1D5DB", linewidth=1)
+        ax.set_xlabel(f"{target_label} real")
+        ax.set_ylabel(f"{target_label} predicho")
+        st.pyplot(fig)
+
+    with col_fi_reg:
+        st.subheader("Importancia de variables (regresión)")
+        if reg_data.get("importancia_variables"):
+            imp = reg_data["importancia_variables"]
+            imp_sorted = sorted(imp.items(), key=lambda x: x[1], reverse=True)
+            nombres_imp = [ETIQUETAS_VAR.get(v, v) for v, _ in imp_sorted]
+            valores_imp = [val for _, val in imp_sorted]
+            fig, ax = plt.subplots(figsize=(5, 4))
+            ax.barh(nombres_imp[::-1], valores_imp[::-1], color="#E8833A")
+            ax.set_xlabel("Importancia")
+            ax.tick_params(labelsize=7)
+            st.pyplot(fig)
+        else:
+            st.info("El mejor regresor no expone importancia de variables directa.")
+
+    st.markdown(
+        f"El mejor regresor es **{mejor_reg}** con un R² de **{mejor_reg_res['r2']:.3f}**, "
+        f"MAE de **\\${mejor_reg_res['mae']:,.0f}** y RMSE de **\\${mejor_reg_res['rmse']:,.0f}**. "
+        "La línea punteada en el gráfico representa la predicción perfecta; cuanto más cerca "
+        "estén los puntos de esa línea, mejor es el modelo."
+    )
+
+    with st.expander("Ver hiperparámetros óptimos por modelo"):
+        for nombre, res in reg_data["resultados"].items():
+            if res["best_params"]:
+                params_str = ", ".join(f"{k}={v}" for k, v in res["best_params"].items())
+                st.markdown(f"**{nombre}**: {params_str}")
+            else:
+                st.markdown(f"**{nombre}**: sin hiperparámetros (modelo cerrado)")
+
+    st.divider()
+
+    # ── Simulador supervisado ────────────────────────────────────────
+    st.header("Simulador supervisado")
+    st.caption(
+        "Ingresa las características de un usuario para clasificarlo con el mejor clasificador "
+        "supervisado y estimar su gasto mensual con el mejor regresor."
+    )
+
+    with st.form("simulador_supervisado"):
+        columnas_form = st.columns(3)
+        usuario_sup = {}
+        for i, var in enumerate(variables_perfil):
+            col = columnas_form[i % 3]
+            etiqueta = etiqueta_formulario(var)
+            if var in PORCENTAJE_FRACCION:
+                usuario_sup[var] = col.number_input(
+                    etiqueta, min_value=0.0, max_value=100.0,
+                    value=float(round(promedios_global[var] * 100)), step=1.0,
+                    key=f"sup_{var}",
+                )
+            elif var == "porcentaje_finalizacion":
+                usuario_sup[var] = col.number_input(
+                    etiqueta, min_value=0.0, max_value=100.0,
+                    value=float(round(promedios_global[var])), step=1.0,
+                    key=f"sup_{var}",
+                )
+            elif var in VARIABLES_ENTERAS:
+                usuario_sup[var] = col.number_input(
+                    etiqueta, min_value=0, value=int(round(promedios_global[var])), step=1,
+                    key=f"sup_{var}",
+                )
+            else:
+                usuario_sup[var] = col.number_input(
+                    etiqueta, min_value=0.0,
+                    value=float(round(promedios_global[var], 1)),
+                    key=f"sup_{var}",
+                )
+        enviado_sup = st.form_submit_button("Clasificar y estimar gasto")
+
+    if enviado_sup:
+        col_res_cls, col_res_reg = st.columns(2)
+        with col_res_cls:
+            try:
+                resp_cls = requests.post(
+                    "http://ml-service:8000/predict-clasificador",
+                    json=usuario_sup, timeout=30,
+                )
+                resp_cls.raise_for_status()
+                cluster_sup = resp_cls.json()["cluster"]
+                st.success(f"**Segmento:** {nombre_segmento(cluster_sup)}")
+                descripcion = DESCRIPCIONES_SEGMENTOS.get(cluster_sup)
+                if descripcion:
+                    st.markdown(descripcion)
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error en clasificación: {e}")
+        with col_res_reg:
+            try:
+                datos_reg = {k: v for k, v in usuario_sup.items() if k != "gasto_mensual"}
+                resp_reg = requests.post(
+                    "http://ml-service:8000/predict-gasto",
+                    json=datos_reg, timeout=30,
+                )
+                resp_reg.raise_for_status()
+                gasto_est = resp_reg.json()["gasto_mensual_estimado"]
+                st.success(f"**Gasto mensual estimado:** ${gasto_est:,.0f}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error en regresión: {e}")

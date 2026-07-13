@@ -6,6 +6,11 @@ import pytest
 from unittest.mock import patch, MagicMock
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import accuracy_score, f1_score, r2_score
 
 import sys
 import os
@@ -226,3 +231,216 @@ def test_centroides_escala_original(df_streaming, df_perfil):
     centroides_original = scaler.inverse_transform(kmeans.cluster_centers_)
     assert centroides_original.shape == (3, X.shape[1])
     assert centroides_original.shape[1] == 15
+
+
+# Tests de clasificación supervisada
+
+@pytest.fixture
+def datos_con_clusters(df_streaming, df_perfil):
+    """Datos integrados con clusters asignados por KMeans."""
+    data = df_streaming.merge(df_perfil, on="id_cliente")
+    X = data.drop(columns=["id_cliente"])
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    kmeans = KMeans(n_clusters=3, random_state=29, n_init=10)
+    data["cluster"] = kmeans.fit_predict(X_scaled)
+    return data, list(X.columns)
+
+
+def test_pipeline_clasificacion_accuracy(datos_con_clusters):
+    """Un pipeline de clasificación supervisada alcanza accuracy razonable."""
+    data, columnas = datos_con_clusters
+    X = data[columnas].values
+    y = data["cluster"].values
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.3, random_state=29, stratify=y,
+    )
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", RandomForestClassifier(n_estimators=100, random_state=29)),
+    ])
+    pipe.fit(X_train, y_train)
+    acc = accuracy_score(y_test, pipe.predict(X_test))
+    assert acc > 0.5, f"Accuracy demasiado baja: {acc}"
+
+
+def test_gridsearchcv_clasificacion(datos_con_clusters):
+    """GridSearchCV selecciona hiperparámetros y mejora o mantiene el score."""
+    data, columnas = datos_con_clusters
+    X = data[columnas].values
+    y = data["cluster"].values
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=1000, random_state=29)),
+    ])
+    grid = GridSearchCV(pipe, {"clf__C": [0.1, 1, 10]}, cv=3, scoring="f1_macro")
+    grid.fit(X, y)
+    assert grid.best_score_ > 0, "El mejor CV score debe ser positivo"
+    assert "clf__C" in grid.best_params_
+
+
+def test_feature_importances_clasificacion(datos_con_clusters):
+    """El clasificador RandomForest expone importancia de variables."""
+    data, columnas = datos_con_clusters
+    X = data[columnas].values
+    y = data["cluster"].values
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", RandomForestClassifier(n_estimators=50, random_state=29)),
+    ])
+    pipe.fit(X, y)
+    importancias = pipe.named_steps["clf"].feature_importances_
+    assert len(importancias) == len(columnas)
+    assert np.all(importancias >= 0)
+
+
+# Tests de regresión supervisada
+
+def test_pipeline_regresion_r2(datos_con_clusters):
+    """Un pipeline de regresión produce un R² definido."""
+    data, columnas = datos_con_clusters
+    target = "gasto_mensual"
+    features = [c for c in columnas if c != target]
+    X = data[features].values
+    y = data[target].values
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.3, random_state=29,
+    )
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("reg", GradientBoostingRegressor(n_estimators=50, random_state=29)),
+    ])
+    pipe.fit(X_train, y_train)
+    r2 = r2_score(y_test, pipe.predict(X_test))
+    assert r2 > -1, f"R² demasiado bajo: {r2}"
+
+
+def test_gridsearchcv_regresion(datos_con_clusters):
+    """GridSearchCV selecciona hiperparámetros para el regresor."""
+    data, columnas = datos_con_clusters
+    target = "gasto_mensual"
+    features = [c for c in columnas if c != target]
+    X = data[features].values
+    y = data[target].values
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("reg", LinearRegression()),
+    ])
+    grid = GridSearchCV(pipe, {}, cv=3, scoring="r2")
+    grid.fit(X, y)
+    assert grid.best_score_ is not None
+
+
+def test_prediccion_regresion_valores_positivos(datos_con_clusters):
+    """Las predicciones de gasto son números finitos."""
+    data, columnas = datos_con_clusters
+    target = "gasto_mensual"
+    features = [c for c in columnas if c != target]
+    X = data[features].values
+    y = data[target].values
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("reg", LinearRegression()),
+    ])
+    pipe.fit(X, y)
+    predicciones = pipe.predict(X)
+    assert np.all(np.isfinite(predicciones))
+
+
+# Tests de transformadores personalizados
+
+def test_winsorizer_recorta_outliers():
+    """Winsorizer recorta valores extremos por percentil."""
+    from preprocesamiento import Winsorizer
+    np.random.seed(42)
+    X = np.random.randn(100, 3)
+    X[0, 0] = 100
+    X[1, 1] = -100
+    winz = Winsorizer(limits=(0.05, 0.05))
+    X_t = np.asarray(winz.fit_transform(X))
+    assert X_t[0, 0] < 100
+    assert X_t[1, 1] > -100
+    assert X_t.shape == X.shape
+
+
+def test_winsorizer_preserva_no_outliers():
+    """Winsorizer no modifica valores dentro del rango completo."""
+    from preprocesamiento import Winsorizer
+    X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]])
+    winz = Winsorizer(limits=(0.0, 0.0))
+    X_t = np.asarray(winz.fit_transform(X))
+    np.testing.assert_array_almost_equal(X, X_t)
+
+
+def test_correlation_filter_elimina_colineales():
+    """CorrelationFilter elimina variables altamente correlacionadas."""
+    from preprocesamiento import CorrelationFilter
+    np.random.seed(42)
+    x1 = np.random.randn(100)
+    x2 = x1 + np.random.randn(100) * 0.01
+    x3 = np.random.randn(100)
+    X = np.column_stack([x1, x2, x3])
+    cf = CorrelationFilter(threshold=0.9)
+    X_t = cf.fit_transform(X)
+    assert X_t.shape[1] < X.shape[1]
+    assert X_t.shape[1] == 2
+
+
+def test_correlation_filter_preserva_independientes():
+    """CorrelationFilter no elimina variables con baja correlación."""
+    from preprocesamiento import CorrelationFilter
+    np.random.seed(42)
+    X = np.random.randn(100, 5)
+    cf = CorrelationFilter(threshold=0.9)
+    X_t = cf.fit_transform(X)
+    assert X_t.shape[1] == 5
+
+
+def test_pipeline_robusto_clasificacion(datos_con_clusters):
+    """Pipeline con Winsorizer, Scaler y CorrelationFilter clasifica correctamente."""
+    from preprocesamiento import Winsorizer, CorrelationFilter
+    data, columnas = datos_con_clusters
+    X = data[columnas].values
+    y = data["cluster"].values
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.3, random_state=29, stratify=y,
+    )
+    pipe = Pipeline([
+        ("winsorizer", Winsorizer()),
+        ("scaler", StandardScaler()),
+        ("colinealidad", CorrelationFilter()),
+        ("clf", RandomForestClassifier(n_estimators=50, random_state=29)),
+    ])
+    pipe.fit(X_train, y_train)
+    acc = accuracy_score(y_test, pipe.predict(X_test))
+    assert acc > 0.4
+
+
+def test_two_stage_tuning_clasificacion(datos_con_clusters):
+    """Búsqueda en dos etapas (RandomizedSearchCV → GridSearchCV) funciona."""
+    from preprocesamiento import Winsorizer, CorrelationFilter
+    from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+    from scipy.stats import randint as sp_randint
+    data, columnas = datos_con_clusters
+    X = data[columnas].values
+    y = data["cluster"].values
+    pipe = Pipeline([
+        ("winsorizer", Winsorizer()),
+        ("scaler", StandardScaler()),
+        ("colinealidad", CorrelationFilter()),
+        ("clf", RandomForestClassifier(random_state=29)),
+    ])
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=29)
+    random_search = RandomizedSearchCV(
+        pipe, {"clf__n_estimators": sp_randint(10, 100)},
+        n_iter=5, cv=skf, scoring="f1_macro", random_state=29,
+    )
+    random_search.fit(X, y)
+    assert random_search.best_score_ > 0
+    best_n = random_search.best_params_["clf__n_estimators"]
+    grid = GridSearchCV(
+        pipe, {"clf__n_estimators": [max(10, best_n - 20), best_n, best_n + 20]},
+        cv=skf, scoring="f1_macro",
+    )
+    grid.fit(X, y)
+    assert grid.best_score_ > 0

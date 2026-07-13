@@ -1,6 +1,6 @@
 # Segmentación de usuarios mediante técnicas de aprendizaje no supervisado
 
-Proyecto de ciencia de datos orientado a identificar grupos de usuarios con comportamientos similares dentro de una plataforma de streaming. A partir de dos fuentes de datos internas, se construye un conjunto analítico consolidado que alimenta un modelo KMeans. Los resultados se exponen a través de una API REST y se visualizan en un dashboard interactivo.
+Proyecto de ciencia de datos orientado a identificar grupos de usuarios con comportamientos similares dentro de una plataforma de streaming. A partir de dos fuentes de datos internas, se construye un conjunto analítico consolidado que alimenta un modelo KMeans y modelos supervisados de clasificación y regresión. Los resultados se exponen a través de una API REST y se visualizan en un dashboard interactivo con cuatro vistas diferenciadas.
 
 ## Arquitectura
 
@@ -16,8 +16,8 @@ El sistema está compuesto por tres servicios orquestados con Docker Compose:
                         │                                              │
  usuarios_streaming.csv─┤                                              │
                         │  train.py ──► KMeans ──► outputs/           │
- PostgreSQL ────────────┤    (ETL)       (modelo)   usuarios_seg.csv  │
- perfil_usuario         │                           centroides.csv    │
+ PostgreSQL ────────────┤    (ETL)    + Supervisado  usuarios_seg.csv  │
+ perfil_usuario         │              modelos/      centroides.csv    │
                         │                                              │
                         │  app.py (FastAPI :8000)                      │
                         └──────────────────┬───────────────────────────┘
@@ -63,12 +63,18 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 | Categoría | Herramientas |
 |-----------|--------------|
 | Lenguaje | Python 3.12 |
-| Machine Learning | scikit-learn (KMeans, StandardScaler, PCA, Silhouette), KneeLocator |
+| Machine Learning | scikit-learn (KMeans, PCA, Silhouette, LogReg, RF, SVM, KNN, GB) |
+| Selección de k | KneeLocator (kneed) |
+| Tuning | RandomizedSearchCV, GridSearchCV, scipy.stats |
+| Preprocesamiento | Winsorizer, CorrelationFilter (transformadores personalizados) |
 | Procesamiento de datos | pandas, NumPy |
-| Base de datos | PostgreSQL, SQLAlchemy |
+| Base de datos | PostgreSQL 16, SQLAlchemy |
 | API | FastAPI, Uvicorn |
 | Visualización | Streamlit, Matplotlib, Seaborn |
+| Testing | pytest (36 tests) |
 | Infraestructura | Docker, Docker Compose |
+| CI/CD | GitHub Actions |
+| Control de versiones | Git, GitHub |
 
 ## Estructura del proyecto
 
@@ -76,33 +82,40 @@ El contenido de `database/perfil_usuarios.csv` se carga automáticamente en Post
 .
 ├── data/
 │   ├── raw/
-│   │   └── usuarios_streaming.csv       # input crudo, versionado
-│   └── processed/                       # merge generado por train.py, no versionado
-├── outputs/                             # resultados generados por train.py, no versionados
-│   ├── usuarios_segmentados.csv         # (se crea al entrenar)
-│   └── centroides.csv                   # (se crea al entrenar)
+│   │   └── usuarios_streaming.csv
+│   └── processed/
+│       └── usuarios_integrados.csv
+├── outputs/
+│   ├── usuarios_segmentados.csv
+│   └── centroides.csv
 ├── database/
-│   ├── init.sql                         # crea tabla y carga CSV en PostgreSQL
+│   ├── init.sql
 │   └── perfil_usuarios.csv
 ├── ml-service/
-│   ├── train.py                         # pipeline ETL + entrenamiento
-│   ├── app.py                           # API FastAPI
+│   ├── train.py
+│   ├── app.py
+│   ├── preprocesamiento.py
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── dashboard/
-│   ├── app.py                           # visualización Streamlit
-│   ├── .streamlit/
-│   │   └── config.toml                  # tema visual del dashboard
+│   ├── app.py
+│   ├── .streamlit/config.toml
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── tests/
-│   ├── test_train.py                    # tests unitarios del pipeline ETL
-│   ├── test_api.py                      # tests de integración de la API
-│   ├── Dockerfile                       # contenedor para ejecutar los tests
+│   ├── test_train.py
+│   ├── test_api.py
+│   ├── Dockerfile
 │   └── requirements.txt
 ├── docs/
-│   └── informe.tex                      # informe técnico en LaTeX
-└── docker-compose.yml
+│   ├── api.md
+│   ├── arquitectura.md
+│   └── deployment.md
+├── .github/
+│   └── workflows/ci.yml
+├── docker-compose.yml
+├── .env.example
+└── README.md
 ```
 
 ## Requisitos
@@ -166,20 +179,54 @@ Una vez dentro de `psql`, listar las tablas con `\dt` y consultar los datos carg
 
 `ml-service/train.py` ejecuta los siguientes pasos en orden:
 
-1. Lee `data/raw/usuarios_streaming.csv`
-2. Consulta la tabla `perfil_usuario` desde PostgreSQL vía SQLAlchemy
-3. Integra ambas fuentes por `id_cliente` y guarda el resultado en `data/processed/`
-4. Elimina la columna `id_cliente` y escala todas las variables con `StandardScaler`
-5. Evalúa entre 2 y 10 clusters calculando inercia y coeficiente Silhouette para cada `k`
-6. Selecciona el `k` óptimo automáticamente usando `KneeLocator` sobre la curva de inercia
-7. Entrena el modelo final con el `k` seleccionado
-8. Aplica PCA de 2 componentes para permitir visualización en 2D
-9. Guarda en `outputs/`: usuarios con cluster y componentes PCA, centroides en escala original
-10. Persiste el modelo, scaler y PCA en el volumen `models/` para que la API los cargue
+1. Lee `data/raw/usuarios_streaming.csv` por bloques (chunks de 10 000)
+2. Consulta la tabla `perfil_usuario` desde PostgreSQL vía SQLAlchemy, también por bloques
+3. Valida el esquema de cada fuente (columnas esperadas y tipos numéricos)
+4. Integra ambas fuentes por `id_cliente` con merge validado (`validate="one_to_one"`)
+5. Diagnostica nulos (cuantifica y registra detalle por columna) y aplica `dropna`
+6. Valida rangos de columnas porcentuales y detecta outliers por IQR
+7. Optimiza tipos con `pd.to_numeric(downcast=...)` para reducir uso de memoria
+8. Genera resumen estadístico agrupado por rangos de antigüedad
+9. Escala las 15 variables con `StandardScaler`
+10. Evalúa entre 2 y 10 clusters calculando inercia y coeficiente Silhouette
+11. Selecciona el `k` óptimo con `KneeLocator` sobre la curva de inercia
+12. Entrena KMeans con el `k` seleccionado y calcula distancias a centroides (broadcasting)
+13. Aplica PCA de 2 componentes para visualización 2D
+14. Entrena modelos supervisados de clasificación y regresión con tuning en dos etapas
+15. Persiste modelos, métricas y resultados en `models/` y `outputs/`
+
+### Preprocesamiento personalizado (preprocesamiento.py)
+
+Se implementaron dos transformadores compatibles con `sklearn.Pipeline`:
+
+- **Winsorizer**: recorta outliers a percentiles específicos (`limits=(0.05, 0.05)`)
+- **CorrelationFilter**: elimina variables con correlación absoluta > 0.9
+
+Ambos siguen el patrón `BaseEstimator + TransformerMixin`.
 
 ### Selección del número de clusters
 
 Se combina el método del codo (KneeLocator sobre la curva de inercia) con el coeficiente Silhouette para validar la cohesión interna de los grupos. El `k` detectado por el codo se usa como criterio de selección principal; el Silhouette sirve como métrica de calidad del resultado.
+
+### Modelos supervisados
+
+Después de la segmentación no supervisada, el pipeline entrena automáticamente modelos supervisados con un pipeline robusto de preprocesamiento: `Winsorizer → StandardScaler → CorrelationFilter → modelo`.
+
+**Clasificación** — predecir el segmento de un usuario:
+- Algoritmos: Logistic Regression, Random Forest, SVM, KNN
+- Tuning en dos etapas: RandomizedSearchCV (n_iter=20, exploración) → GridSearchCV (refinamiento)
+- Validación cruzada: StratifiedKFold(5), scoring F1 macro
+- Métricas: accuracy, precision, recall, F1 macro, matriz de confusión, importancia de variables
+
+**Regresión** — predecir el gasto mensual:
+- Algoritmos: Linear Regression, Random Forest, Gradient Boosting
+- Misma estructura de pipeline y tuning en dos etapas
+- Validación cruzada: KFold(5), scoring R²
+- Métricas: R², MAE, RMSE, importancia de variables
+
+La selección del target de regresión (`gasto_mensual`) se justifica estadísticamente: es la variable con mayor correlación media absoluta con el resto del conjunto, además de ser el proxy más directo del valor económico del cliente.
+
+El mejor clasificador y el mejor regresor se persisten en `models/` junto con sus métricas en `metricas_supervisado.json`.
 
 ## API
 
@@ -218,9 +265,13 @@ Retorna los usuarios segmentados, los centroides y las métricas del modelo en f
 }
 ```
 
+### `GET /supervised-data`
+
+Retorna métricas de los modelos supervisados (clasificación y regresión): resultados por modelo, mejor modelo, importancia de variables y datos para el scatter plot de regresión.
+
 ### `POST /predict`
 
-Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo entrenado.
+Clasifica un nuevo usuario en uno de los segmentos existentes usando el modelo KMeans.
 
 Todos los porcentajes se envían en escala **0–100** (por ejemplo, `30` = 30%).
 
@@ -254,13 +305,31 @@ Todos los porcentajes se envían en escala **0–100** (por ejemplo, `30` = 30%)
 
 Devuelve `400` si falta alguna variable o si los datos enviados son inválidos.
 
+### `POST /predict-clasificador`
+
+Clasifica un usuario usando el mejor clasificador supervisado (en lugar de KMeans directo). Mismo formato de body que `POST /predict`.
+
+### `POST /predict-gasto`
+
+Predice el gasto mensual de un usuario a partir de sus 14 variables restantes.
+
+**Body esperado:** todas las variables del perfil excepto `gasto_mensual`.
+
+**Respuesta:**
+```json
+{
+  "gasto_mensual_estimado": 88.56
+}
+```
+
 ## Dashboard
 
-El dashboard permite explorar los segmentos obtenidos seleccionando desde la barra lateral qué segmentos mostrar. Las visualizaciones se adaptan a tres audiencias, también seleccionables desde la barra lateral:
+El dashboard permite explorar los segmentos obtenidos seleccionando desde la barra lateral qué segmentos mostrar. Las visualizaciones se adaptan a cuatro audiencias, también seleccionables desde la barra lateral:
 
 - **Ejecutiva**: indicadores de alto nivel, tamaño de cada segmento e interpretación de negocio generada automáticamente para cada grupo.
 - **Técnica**: métricas de validación del modelo, método del codo, coeficiente Silhouette por k, proyección PCA, mapa de calor normalizado y gráfico radial.
 - **Operativa**: perfilamiento detallado por segmento, distribución por variable seleccionable, centroides en escala original y un **simulador de clasificación** que asigna un usuario nuevo a su segmento mediante el endpoint `POST /predict`.
+- **Supervisado**: comparación de modelos de clasificación y regresión con sus métricas (accuracy, F1, R², MAE), matrices de confusión, importancia de variables, scatter plot real vs. predicción y un **simulador supervisado** que clasifica al usuario y estima su gasto mensual.
 
 ## Resultados de la segmentación
 
@@ -288,35 +357,61 @@ El modelo identificó **3 segmentos** de usuarios. La siguiente tabla resume las
 
 > Los valores corresponden al modelo entrenado con el dataset actual (`random_state` fijo, resultados reproducibles). Si se reentrena con datos distintos, los segmentos pueden variar.
 
+## CI/CD
+
+El proyecto cuenta con un pipeline de integración continua en `.github/workflows/ci.yml` que se activa en push a `main`, `Felipe` y `Francisca`, y en pull requests a `main`.
+
+El pipeline ejecuta dos jobs:
+
+1. **unit-tests**: instala dependencias en Python 3.12 y ejecuta `pytest tests/ -v`.
+2. **docker-build**: construye las imágenes, levanta los servicios, verifica que la API responda y ejecuta los tests en contenedor.
+
 ## Testing
 
-El proyecto incluye tests unitarios y de integración en la carpeta `tests/`, con su propio contenedor definido en `docker-compose.yml` bajo el perfil `test`. Para ejecutarlos:
+El proyecto incluye **36 tests** en la carpeta `tests/`, con su propio contenedor definido en `docker-compose.yml` bajo el perfil `test`. Para ejecutarlos:
 
 ```bash
 docker compose run --rm tests
 ```
 
-Este comando construye la imagen de tests, ejecuta `pytest` y muestra los resultados en consola. El servicio usa el perfil `test`, por lo que no se levanta junto con los servicios principales (`docker compose up` no lo incluye).
-
 Para ejecutarlos localmente sin Docker:
 
 ```bash
 pip install -r tests/requirements.txt
+pip install -r ml-service/requirements.txt
 pytest tests/ -v
 ```
 
 ### Tests del pipeline ETL (`test_train.py`)
 
-- Validación de esquema: columnas presentes y tipos numéricos.
-- Integración de fuentes: merge por `id_cliente`, detección de vacíos y nulos.
+- Validación de esquema: columnas presentes, faltantes, tipos numéricos, tipos incorrectos.
+- Integración de fuentes: merge por `id_cliente`, merge sin coincidencias, eliminación de nulos.
 - Escalamiento: media cero y desviación estándar uno tras `StandardScaler`.
-- Modelo KMeans: asignación de clusters, reproducibilidad, inercia decreciente, Silhouette en rango válido.
+- Modelo KMeans: asignación de clusters, reproducibilidad, inercia decreciente, Silhouette válido.
 - Centroides: dimensiones correctas tras inversión a escala original.
+
+### Tests de modelos supervisados (`test_train.py`)
+
+- Pipeline de clasificación: accuracy razonable con RandomForest.
+- GridSearchCV: selecciona hiperparámetros para clasificación y regresión.
+- Feature importances: el clasificador expone importancia de variables.
+- Pipeline de regresión: R² definido con GradientBoosting.
+- Predicciones de regresión: valores finitos.
+
+### Tests de transformadores (`test_train.py`)
+
+- Winsorizer: recorta outliers, preserva valores dentro del rango.
+- CorrelationFilter: elimina variables colineales, preserva independientes.
+- Pipeline robusto: Winsorizer + Scaler + CorrelationFilter + modelo clasifica correctamente.
+- Tuning en dos etapas: RandomizedSearchCV → GridSearchCV funciona.
 
 ### Tests de la API (`test_api.py`)
 
 - `GET /`: respuesta 200 con mensaje de estado.
-- `POST /predict`: clasificación válida, error 400 con variables faltantes, reproducibilidad.
+- `POST /predict`: clasificación válida, error 400, reproducibilidad, usuarios extremos.
+- `GET /supervised-data`: retorna datos de clasificación y regresión.
+- `POST /predict-clasificador`: cluster válido, error 400 con variables faltantes.
+- `POST /predict-gasto`: estimación numérica, error 400 con variables faltantes.
 
 ## Logging
 
@@ -324,20 +419,20 @@ El pipeline ETL y la API utilizan el módulo `logging` de Python con formato est
 
 ```
 2025-06-28 14:32:01 [INFO] usuarios_streaming.csv cargado: 300 registros
-2025-06-28 14:32:02 [WARNING] Se encontraron 2 valores nulos. Se eliminan filas afectadas.
+2025-06-28 14:32:02 [WARNING] Nulos detectados: 2 valores en 1 filas (0.3% del dataset).
 2025-06-28 14:32:03 [ERROR] No se encontró data/raw/usuarios_streaming.csv
 ```
 
 Los niveles de severidad son:
-- **INFO**: progreso normal del pipeline (carga, validación, entrenamiento).
-- **WARNING**: situaciones recuperables (valores nulos eliminados, codo no detectado).
+- **INFO**: progreso normal del pipeline (carga, validación, entrenamiento, optimización de memoria).
+- **WARNING**: situaciones recuperables (valores nulos, codo no detectado, rangos fuera de límite).
 - **ERROR**: fallos que detienen la ejecución (archivo faltante, conexión fallida).
 
 La salida se dirige a stdout y se puede consultar con `docker compose logs`.
 
 ## Colaboración
 
-El trabajo se organiza en ramas por integrante. Cada rama concentra los cambios del respectivo desarrollador y se integra a `main` una vez revisada.
+El trabajo se organiza en ramas por integrante. Cada rama concentra los cambios del respectivo desarrollador y se integra a `main` una vez revisada. El pipeline CI/CD valida automáticamente cada push.
 
 | Integrante | Rama |
 |------------|------|
