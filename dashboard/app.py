@@ -824,68 +824,107 @@ elif audiencia == "Supervisado":
 
         st.divider()
 
-        st.header("Simulador supervisado")
+        st.header("Clasificar usuario en segmento")
         st.markdown(
-            "Ingresa las características de un usuario para clasificarlo con el mejor clasificador "
-            "supervisado y estimar su gasto mensual con el mejor regresor."
+            "Ingresa las características de un usuario (incluyendo su gasto mensual) "
+            "para asignarlo al segmento más probable con el mejor clasificador supervisado."
         )
 
-        with st.form("simulador_supervisado"):
+        with st.form("simulador_clasificador"):
             columnas_form = st.columns(3)
-            usuario_sup = {}
+            usuario_cls = {}
             for i, var in enumerate(variables_perfil):
                 col = columnas_form[i % 3]
                 etiqueta = etiqueta_formulario(var)
                 if var in PORCENTAJE_FRACCION:
-                    usuario_sup[var] = col.number_input(
+                    usuario_cls[var] = col.number_input(
                         etiqueta, min_value=0.0, max_value=100.0,
                         value=float(round(promedios_global[var] * 100)), step=1.0,
-                        key=f"sup_{var}",
+                        key=f"cls_{var}",
                     )
                 elif var == "porcentaje_finalizacion":
-                    usuario_sup[var] = col.number_input(
+                    usuario_cls[var] = col.number_input(
                         etiqueta, min_value=0.0, max_value=100.0,
                         value=float(round(promedios_global[var])), step=1.0,
-                        key=f"sup_{var}",
+                        key=f"cls_{var}",
                     )
                 elif var in VARIABLES_ENTERAS:
-                    usuario_sup[var] = col.number_input(
+                    usuario_cls[var] = col.number_input(
                         etiqueta, min_value=0, value=int(round(promedios_global[var])), step=1,
-                        key=f"sup_{var}",
+                        key=f"cls_{var}",
                     )
                 else:
-                    usuario_sup[var] = col.number_input(
+                    usuario_cls[var] = col.number_input(
                         etiqueta, min_value=0.0,
                         value=float(round(promedios_global[var], 1)),
-                        key=f"sup_{var}",
+                        key=f"cls_{var}",
                     )
-            enviado_sup = st.form_submit_button("Clasificar y estimar gasto")
+            enviado_cls = st.form_submit_button("Clasificar usuario")
 
-        if enviado_sup:
-            col_res_cls, col_res_reg = st.columns(2)
-            with col_res_cls:
-                try:
-                    resp_cls = requests.post(
-                        "http://ml-service:8000/predict-clasificador",
-                        json=usuario_sup, timeout=30,
+        if enviado_cls:
+            try:
+                resp_cls = requests.post(
+                    "http://ml-service:8000/predict-clasificador",
+                    json=usuario_cls, timeout=30,
+                )
+                resp_cls.raise_for_status()
+                cluster_sup = resp_cls.json()["cluster"]
+                st.success(f"**Segmento:** {nombre_segmento(cluster_sup)}")
+                descripcion = DESCRIPCIONES_SEGMENTOS.get(cluster_sup)
+                if descripcion:
+                    st.markdown(descripcion)
+                st.info(f"**Acción sugerida:** {ACCIONES_SEGMENTOS.get(cluster_sup, 'Sin acción definida.')}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error en clasificación: {e}")
+
+        st.divider()
+
+        st.header("Estimar gasto mensual")
+        st.markdown(
+            "Ingresa las características de un usuario (sin gasto mensual) "
+            "para predecir su gasto esperado con el mejor regresor."
+        )
+
+        with st.form("simulador_regresor"):
+            columnas_form = st.columns(3)
+            usuario_reg = {}
+            vars_reg = [v for v in variables_perfil if v != "gasto_mensual"]
+            for i, var in enumerate(vars_reg):
+                col = columnas_form[i % 3]
+                etiqueta = etiqueta_formulario(var)
+                if var in PORCENTAJE_FRACCION:
+                    usuario_reg[var] = col.number_input(
+                        etiqueta, min_value=0.0, max_value=100.0,
+                        value=float(round(promedios_global[var] * 100)), step=1.0,
+                        key=f"reg_{var}",
                     )
-                    resp_cls.raise_for_status()
-                    cluster_sup = resp_cls.json()["cluster"]
-                    st.success(f"**Segmento:** {nombre_segmento(cluster_sup)}")
-                    descripcion = DESCRIPCIONES_SEGMENTOS.get(cluster_sup)
-                    if descripcion:
-                        st.markdown(descripcion)
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Error en clasificación: {e}")
-            with col_res_reg:
-                try:
-                    datos_reg = {k: v for k, v in usuario_sup.items() if k != "gasto_mensual"}
-                    resp_reg = requests.post(
-                        "http://ml-service:8000/predict-gasto",
-                        json=datos_reg, timeout=30,
+                elif var == "porcentaje_finalizacion":
+                    usuario_reg[var] = col.number_input(
+                        etiqueta, min_value=0.0, max_value=100.0,
+                        value=float(round(promedios_global[var])), step=1.0,
+                        key=f"reg_{var}",
                     )
-                    resp_reg.raise_for_status()
-                    gasto_est = resp_reg.json()["gasto_mensual_estimado"]
-                    st.success(f"**Gasto mensual estimado:** ${gasto_est:,.0f}")
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Error en regresión: {e}")
+                elif var in VARIABLES_ENTERAS:
+                    usuario_reg[var] = col.number_input(
+                        etiqueta, min_value=0, value=int(round(promedios_global[var])), step=1,
+                        key=f"reg_{var}",
+                    )
+                else:
+                    usuario_reg[var] = col.number_input(
+                        etiqueta, min_value=0.0,
+                        value=float(round(promedios_global[var], 1)),
+                        key=f"reg_{var}",
+                    )
+            enviado_reg = st.form_submit_button("Estimar gasto")
+
+        if enviado_reg:
+            try:
+                resp_reg = requests.post(
+                    "http://ml-service:8000/predict-gasto",
+                    json=usuario_reg, timeout=30,
+                )
+                resp_reg.raise_for_status()
+                gasto_est = resp_reg.json()["gasto_mensual_estimado"]
+                st.success(f"**Gasto mensual estimado:** ${gasto_est:,.0f}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Error en regresión: {e}")
