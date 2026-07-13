@@ -13,7 +13,8 @@ COPY . .
 
 EXPOSE 8000
 
-CMD python train.py && \
+CMD python -c "import os; exit(0) if os.path.exists('models/modelo_kmeans.pkl') else exit(1)" \
+    || python train.py && \
     uvicorn app:app \
     --host 0.0.0.0 \
     --port 8000
