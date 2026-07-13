@@ -8,6 +8,7 @@ import json
 import logging
 import pickle
 
+import numpy as np
 import preprocesamiento  # noqa: F401 — pickle necesita el módulo para deserializar Winsorizer/CorrelationFilter
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -21,9 +22,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Servicio Segmentación Usuarios Streaming")
 
+def _forzar_float64(obj):
+    """Convierte arrays internos de un estimador sklearn a float64."""
+    for attr in ("mean_", "scale_", "var_", "cluster_centers_"):
+        if hasattr(obj, attr):
+            setattr(obj, attr, getattr(obj, attr).astype(np.float64))
+
 try:
     modelo = pickle.load(open("models/modelo_kmeans.pkl", "rb"))
     scaler = pickle.load(open("models/scaler.pkl", "rb"))
+    _forzar_float64(scaler)
+    _forzar_float64(modelo)
     with open("models/metricas.json") as f:
         metricas = json.load(f)
     logger.info("Modelos y métricas cargados correctamente.")
